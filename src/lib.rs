@@ -39,13 +39,13 @@ pub enum Prefix {
     S,
     U,
     L,
-    ANY,
+    Any,
 }
 #[derive(Debug, PartialEq, Hash, Clone)]
 pub enum Tag {
-    SAME,
-    DIFF,
-    ANY,
+    Same,
+    Diff,
+    Any,
 }
 
 #[derive(Debug, PartialEq, Hash)]
@@ -54,8 +54,6 @@ pub struct Token<'a> {
     prefix: Prefix,
     tag: Cow<'a, str>,
     allowed_prefix: Option<Vec<Prefix>>,
-    /// Pattern are an enum representing the diffrent positions of tokens.
-    patterns: todo!(),
 }
 
 impl<'a> Token<'a> {
@@ -99,9 +97,9 @@ impl<'a> Token<'a> {
     }
     fn check_tag(&self, prev: &Token, cond: Tag) -> bool {
         match cond {
-            Tag::ANY => true,
-            Tag::SAME if prev.tag == self.tag => true,
-            Tag::DIFF if prev.tag != self.tag => true,
+            Tag::Any => true,
+            Tag::Same if prev.tag == self.tag => true,
+            Tag::Diff if prev.tag != self.tag => true,
             _ => false,
         }
     }
@@ -109,8 +107,8 @@ impl<'a> Token<'a> {
     ///
     /// * `prev`: Previous token
     /// * `patterns`: Patterns to match the token against
-    fn check_patterns(&self, prev: &Token, patterns: TokenWithPatterns, pattern: Pattern) -> bool {
-        todo!()
+    fn check_patterns(&self, prev: &Token, outer: TokenWithPatterns, pattern_to_check: Pattern) -> bool {
+        let pattern = (self.prefix, prev.prefix,  );
     }
 }
 
@@ -135,6 +133,12 @@ impl Display for InvalidTokenError {
 
 impl Error for InvalidTokenError {}
 
+enum Pattern {
+    Start,
+    Inside,
+    End,
+}
+
 enum TokenWithPatterns<'a> {
     IOB1 { token: Token<'a> },
     IOE1 { token: Token<'a> },
@@ -147,116 +151,146 @@ enum TokenWithPatterns<'a> {
 impl<'a> TokenWithPatterns<'a> {
     const IOB1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
     const IOB1_START_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
-        (Prefix::O, Prefix::I, Tag::ANY),
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::B, Prefix::I, Tag::ANY),
-        (Prefix::I, Prefix::B, Tag::SAME),
-        (Prefix::B, Prefix::B, Tag::SAME),
+        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::B, Prefix::I, Tag::Any),
+        (Prefix::I, Prefix::B, Tag::Same),
+        (Prefix::B, Prefix::B, Tag::Same),
     ];
     const IOB1_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::B, Prefix::I, Tag::SAME),
-        (Prefix::I, Prefix::I, Tag::SAME),
+        (Prefix::B, Prefix::I, Tag::Same),
+        (Prefix::I, Prefix::I, Tag::Same),
     ];
     const IOB1_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::I, Prefix::O, Tag::ANY),
-        (Prefix::I, Prefix::B, Tag::ANY),
-        (Prefix::B, Prefix::O, Tag::ANY),
-        (Prefix::B, Prefix::I, Tag::DIFF),
-        (Prefix::B, Prefix::B, Tag::SAME),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::B, Tag::Any),
+        (Prefix::B, Prefix::O, Tag::Any),
+        (Prefix::B, Prefix::I, Tag::Diff),
+        (Prefix::B, Prefix::B, Tag::Same),
     ];
     const IOE1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE1_START_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
-        (Prefix::O, Prefix::I, Tag::ANY),
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::E, Prefix::I, Tag::ANY),
-        (Prefix::E, Prefix::E, Tag::SAME),
+        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::E, Prefix::I, Tag::Any),
+        (Prefix::E, Prefix::E, Tag::Same),
     ];
     const IOE1_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::I, Prefix::I, Tag::SAME),
-        (Prefix::I, Prefix::E, Tag::SAME),
+        (Prefix::I, Prefix::I, Tag::Same),
+        (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOE1_END_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::I, Prefix::O, Tag::ANY),
-        (Prefix::I, Prefix::E, Tag::DIFF),
-        (Prefix::E, Prefix::I, Tag::SAME),
-        (Prefix::E, Prefix::E, Tag::SAME),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::E, Tag::Diff),
+        (Prefix::E, Prefix::I, Tag::Same),
+        (Prefix::E, Prefix::E, Tag::Same),
     ];
 
     const IOB2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
-    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::ANY, Prefix::I, Tag::ANY)];
+    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::Any, Prefix::I, Tag::Any)];
     const IOB2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::I, Prefix::I, Tag::SAME),
-        (Prefix::I, Prefix::E, Tag::SAME),
+        (Prefix::I, Prefix::I, Tag::Same),
+        (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOB2_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::I, Prefix::O, Tag::ANY),
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::I, Prefix::B, Tag::ANY),
-        (Prefix::B, Prefix::O, Tag::ANY),
-        (Prefix::B, Prefix::I, Tag::DIFF),
-        (Prefix::B, Prefix::B, Tag::ANY),
+        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::I, Prefix::B, Tag::Any),
+        (Prefix::B, Prefix::O, Tag::Any),
+        (Prefix::B, Prefix::I, Tag::Diff),
+        (Prefix::B, Prefix::B, Tag::Any),
     ];
 
     const IOE2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE2_START_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::O, Prefix::I, Tag::ANY),
-        (Prefix::O, Prefix::E, Tag::ANY),
-        (Prefix::E, Prefix::I, Tag::ANY),
-        (Prefix::E, Prefix::E, Tag::ANY),
-        (Prefix::I, Prefix::I, Tag::DIFF),
-        (Prefix::I, Prefix::E, Tag::DIFF),
+        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::O, Prefix::E, Tag::Any),
+        (Prefix::E, Prefix::I, Tag::Any),
+        (Prefix::E, Prefix::E, Tag::Any),
+        (Prefix::I, Prefix::I, Tag::Diff),
+        (Prefix::I, Prefix::E, Tag::Diff),
     ];
     const IOE2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::I, Prefix::E, Tag::SAME),
-        (Prefix::I, Prefix::I, Tag::SAME),
+        (Prefix::I, Prefix::E, Tag::Same),
+        (Prefix::I, Prefix::I, Tag::Same),
     ];
-    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::ANY, Tag::ANY)];
+    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::Any, Tag::Any)];
 
     const IOBES_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::E, Prefix::B, Prefix::S];
     const IOBES_START_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
-        (Prefix::B, Prefix::I, Tag::SAME),
-        (Prefix::B, Prefix::E, Tag::SAME),
-        (Prefix::I, Prefix::I, Tag::SAME),
-        (Prefix::I, Prefix::E, Tag::SAME),
+        (Prefix::B, Prefix::I, Tag::Same),
+        (Prefix::B, Prefix::E, Tag::Same),
+        (Prefix::I, Prefix::I, Tag::Same),
+        (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOBES_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::ANY, Tag::ANY),
-        (Prefix::E, Prefix::ANY, Tag::ANY),
+        (Prefix::S, Prefix::Any, Tag::Any),
+        (Prefix::E, Prefix::Any, Tag::Any),
     ];
     const IOBES_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::ANY, Tag::ANY),
-        (Prefix::E, Prefix::ANY, Tag::ANY),
+        (Prefix::S, Prefix::Any, Tag::Any),
+        (Prefix::E, Prefix::Any, Tag::Any),
     ];
 
     const BILOU_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::U, Prefix::B, Prefix::O];
     const BILOU_START_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::ANY, Prefix::B, Tag::ANY),
-        (Prefix::ANY, Prefix::U, Tag::ANY),
+        (Prefix::Any, Prefix::B, Tag::Any),
+        (Prefix::Any, Prefix::U, Tag::Any),
     ];
     const BILOU_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
-        (Prefix::B, Prefix::I, Tag::SAME),
-        (Prefix::B, Prefix::L, Tag::SAME),
-        (Prefix::I, Prefix::I, Tag::SAME),
-        (Prefix::I, Prefix::L, Tag::SAME),
+        (Prefix::B, Prefix::I, Tag::Same),
+        (Prefix::B, Prefix::L, Tag::Same),
+        (Prefix::I, Prefix::I, Tag::Same),
+        (Prefix::I, Prefix::L, Tag::Same),
     ];
     const BILOU_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::U, Prefix::ANY, Tag::ANY),
-        (Prefix::L, Prefix::ANY, Tag::ANY),
+        (Prefix::U, Prefix::Any, Tag::Any),
+        (Prefix::L, Prefix::Any, Tag::Any),
     ];
     fn allowed_prefixes<'b>(&'a self) -> &'a [Prefix] {
-        todo!();
+        match self {
+            Self::IOB1 { .. } => &Self::IOB1_ALLOWED_PREFIXES,
+            Self::IOE1 { .. } => &Self::IOE1_ALLOWED_PREFIXES,
+            Self::IOB2 { .. } => &Self::IOB2_ALLOWED_PREFIXES,
+            Self::IOE2 { .. } => &Self::IOE2_ALLOWED_PREFIXES,
+            Self::IOBES { .. } => &Self::IOBES_ALLOWED_PREFIXES,
+            Self::BILOU { .. } => &Self::BILOU_ALLOWED_PREFIXES,
+        }
     }
     fn start_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
-        todo!();
+        match self {
+            Self::IOB1 { .. } => &Self::IOB1_START_PATTERNS,
+            Self::IOE1 { .. } => &Self::IOE1_START_PATTERNS,
+            Self::IOB2 { .. } => &Self::IOB2_START_PATTERNS,
+            Self::IOE2 { .. } => &Self::IOE2_START_PATTERNS,
+            Self::IOBES { .. } => &Self::IOBES_START_PATTERNS,
+            Self::BILOU { .. } => &Self::BILOU_START_PATTERNS,
+        }
     }
     fn inside_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
-        todo!();
+        match self {
+            Self::IOB1 { .. } => &Self::IOB1_INSIDE_PATTERNS,
+            Self::IOE1 { .. } => &Self::IOE1_INSIDE_PATTERNS,
+            Self::IOB2 { .. } => &Self::IOB2_INSIDE_PATTERNS,
+            Self::IOE2 { .. } => &Self::IOE2_INSIDE_PATTERNS,
+            Self::IOBES { .. } => &Self::IOBES_INSIDE_PATTERNS,
+            Self::BILOU { .. } => &Self::BILOU_INSIDE_PATTERNS,
+        }
     }
     fn end_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
-        todo!();
+        match self {
+            Self::IOB1 { .. } => &Self::IOB1_END_PATTERNS,
+            Self::IOE1 { .. } => &Self::IOE1_END_PATTERNS,
+            Self::IOB2 { .. } => &Self::IOB2_END_PATTERNS,
+            Self::IOE2 { .. } => &Self::IOE2_END_PATTERNS,
+            Self::IOBES { .. } => &Self::IOBES_END_PATTERNS,
+            Self::BILOU { .. } => &Self::BILOU_END_PATTERNS,
+        }
     }
 }
+
+struct Tokens
