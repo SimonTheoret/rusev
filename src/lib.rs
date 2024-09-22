@@ -6,12 +6,14 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::mem::take;
+use std::rc::Rc;
 use std::str::FromStr;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Hash, PartialEq, Clone)]
 struct Entity<'a> {
-    sent_id: usize,
+    sent_id: Option<usize>,
     start: usize,
     end: usize,
     tag: Cow<'a, str>,
@@ -21,14 +23,14 @@ impl<'a> Display for Entity<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "({}, {}, {}, {})",
+            "({:?}, {}, {}, {})",
             self.sent_id, self.tag, self.start, self.end
         )
     }
 }
 
 impl<'a> Entity<'a> {
-    fn as_tuple(&'a self) -> (usize, usize, usize, &'a str) {
+    fn as_tuple(&'a self) -> (Option<usize>, usize, usize, &'a str) {
         (self.sent_id, self.start, self.end, self.tag.as_ref())
     }
 }
@@ -132,6 +134,16 @@ struct InnerToken<'a> {
     token: Cow<'a, str>,
     prefix: Prefix,
     tag: Cow<'a, str>,
+}
+
+impl<'a> Default for InnerToken<'a> {
+    fn default() -> Self {
+        InnerToken {
+            token: Cow::Borrowed(""),
+            prefix: Prefix::I,
+            tag: Cow::Borrowed(""),
+        }
+    }
 }
 
 // TODO: Move this enum into its own module, as to hide its `new` function.
@@ -257,6 +269,17 @@ enum SchemeType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+struct InvalidToken(String);
+
+impl Display for InvalidToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Invalid token: {}", self.0)
+    }
+}
+
+impl Error for InvalidToken {}
+
+#[derive(Debug, Clone, PartialEq)]
 enum Token<'a> {
     IOB1 { token: InnerToken<'a> },
     IOE1 { token: InnerToken<'a> },
@@ -264,6 +287,14 @@ enum Token<'a> {
     IOE2 { token: InnerToken<'a> },
     IOBES { token: InnerToken<'a> },
     BILOU { token: InnerToken<'a> },
+}
+
+impl<'a> Default for Token<'a> {
+    fn default() -> Self {
+        Token::IOB1 {
+            token: InnerToken::default(),
+        }
+    }
 }
 
 impl<'a> Token<'a> {
@@ -474,7 +505,7 @@ struct Init();
 
 #[derive(Debug, Clone, PartialEq)]
 struct Tokens<'a, Init> {
-    extended_tokens: Vec<Token<'a>>,
+    extended_tokens: Option<Vec<Token<'a>>>,
     sent_id: Option<usize>,
     entities: Option<Vec<Entity<'a>>>,
     init: PhantomData<Init>,
@@ -500,7 +531,7 @@ impl<'a> Tokens<'a, NotInit> {
             .collect::<Result<Vec<Token>, ParsingPrefixError<&'a str>>>()?;
         tokens.push(outside_token); // Tokens are now extended_tokens
         Ok(Self {
-            extended_tokens: tokens,
+            extended_tokens: Some(tokens),
             sent_id,
             entities: None,
             init: PhantomData,
@@ -508,8 +539,57 @@ impl<'a> Tokens<'a, NotInit> {
     }
 
     /// Extract the entities from the Tokens.
-    pub(crate) fn entities(self) -> Tokens<'a, Init> {
-        let i = 0;
+    pub(crate) fn entities(self) -> Result<Tokens<'a, Init>, Box<dyn Error>> {
+        let mut i = 0;
+        let mut entities: Vec<Entity> = vec![];
+        let rc_extended_tokens = Rc::new(self.extended_tokens.unwrap()); // Can unwrap because we are in the
+                                                                         // NotInit impl block
+        let num_extended_tokens = rc_extended_tokens.len();
+        let mut prev = rc_extended_tokens.last().ok_or_else(|| {
+            format!(
+                "This Tokens struct does not contains any token. self.extended_tokens: {:?}",
+                rc_extended_tokens
+            )
+        })?;
+        while i < num_extended_tokens {
+            let token = unsafe { rc_extended_tokens.get_unchecked(i) }; // Safe due to us always making sure i<num_extended_tokens
+            if !token.is_valid() {
+                return Err(Box::new(InvalidToken(token.inner().token.to_string())));
+            }
+            if token.is_start(prev.inner()) {
+                let end = Self::unassociated_forward(
+                    i + 1,
+                    &token,
+                    rc_extended_tokens.as_ref(),
+                    num_extended_tokens,
+                );
+                if Self::unassociated_is_end(end, &rc_extended_tokens) {
+                    let entity = Entity {
+                        sent_id: match &self.sent_id {
+                            Some(i) => Some(*i),
+                            None => None,
+                        },
+                        start: i,
+                        end,
+                        tag: match &token.inner().tag {
+                            Cow::Owned(owned_string) => Cow::Owned(owned_string.clone()),
+                            Cow::Borrowed(ref_string) => Cow::Borrowed(*ref_string),
+                        },
+                    };
+                    entities.push(entity)
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+            prev = &rc_extended_tokens[i - 1];
+        }
+        Ok(Tokens {
+            entities: Some(entities),
+            extended_tokens: None,
+            sent_id: None,
+            init: PhantomData,
+        })
     }
 
     /// Returns the index of the next token not inside, starting from the `start` index.
@@ -518,7 +598,7 @@ impl<'a> Tokens<'a, NotInit> {
     /// * `prev`: Previous token. This token is necessary to know if the token at index `start` is
     /// inside or not.
     fn forward(&self, start: usize, prev: &Token<'a>) -> usize {
-        let slice_of_interest = &self.extended_tokens[start..];
+        let slice_of_interest = &self.extended_tokens()[start..];
         let len_of_slice_of_interest = slice_of_interest.len();
         let mut counter = start; // copies the start index
         let mut swap_token = prev;
@@ -531,14 +611,47 @@ impl<'a> Tokens<'a, NotInit> {
             }
             counter += 1;
             if counter >= len_of_slice_of_interest {
-                break self.extended_tokens.len() - 1;
+                break &self.extended_tokens().len() - 1;
+            }
+        }
+    }
+
+    fn unassociated_forward(
+        start: usize,
+        prev: &Token<'a>,
+        slice: &[Token],
+        slice_len: usize,
+    ) -> usize {
+        let slice_of_interest = &slice[start..];
+        let len_of_slice_of_interest = slice_of_interest.len();
+        let mut counter = start; // copies the start index
+        let mut swap_token = prev;
+        loop {
+            let current_token = &slice_of_interest[counter];
+            if current_token.is_inside(swap_token.inner()) {
+                swap_token = &current_token;
+            } else {
+                return counter;
+            }
+            counter += 1;
+            if counter >= len_of_slice_of_interest {
+                break slice_len - 1;
             }
         }
     }
 
     fn is_end(&self, i: usize) -> bool {
-        let token = &self.extended_tokens[i];
-        let prev = &self.extended_tokens[i - 1];
+        let token = &self.extended_tokens()[i];
+        let prev = &self.extended_tokens()[i - 1];
         token.is_end(prev.inner())
+    }
+    fn unassociated_is_end<'b>(i: usize, tokens: &'b Vec<Token<'b>>) -> bool {
+        let token = &tokens[i];
+        let prev = &tokens[i - 1];
+        token.is_end(prev.inner())
+    }
+
+    fn extended_tokens(&'a self) -> &'a Vec<Token<'a>> {
+        self.extended_tokens.as_ref().unwrap()
     }
 }
