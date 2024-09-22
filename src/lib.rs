@@ -31,7 +31,7 @@ impl<'a> Entity<'a> {
 }
 
 #[derive(Debug, PartialEq, Hash, Clone)]
-pub enum Prefix {
+enum Prefix {
     I,
     O,
     B,
@@ -39,17 +39,47 @@ pub enum Prefix {
     S,
     U,
     L,
-    Any,
+    ANY,
 }
+
+#[derive(Debug, Clone)]
+struct ParsingPrefixError<S:AsRef<str>>(S);
+impl<S:AsRef<str>+Error> Display for ParsingPrefixError<S>{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let content  = self.0.as_ref();
+        write!(f, "Could not parse the following string into a Prefix: {}", content)
+    }
+
+}
+impl<S: AsRef<str>> Error for ParsingPrefixError<S>{}
+
+impl<S:AsRef<str>> TryFrom<S> for Prefix{
+    type Error = ParsingPrefixError<S>;
+    fn try_from(value: S) -> Result<Self, Self::Error> {
+        let ref_val = value.as_ref();
+        match ref_val {
+            "I" => Ok(Prefix::I),
+            "O" => Ok(Prefix::O),
+            "B" => Ok(Prefix::B),
+            "E" => Ok(Prefix::E),
+            "S" => Ok(Prefix::S),
+            "U" => Ok(Prefix::U),
+            "L" => Ok(Prefix::L),
+            "ANY" => Ok(Prefix::ANY),
+            _ => Err(ParsingPrefixError(value))
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Hash, Clone)]
-pub enum Tag {
+enum Tag {
     Same,
     Diff,
     Any,
 }
 
 #[derive(Debug, PartialEq, Hash)]
-pub struct Token<'a> {
+struct Token<'a> {
     token: Cow<'a, str>,
     prefix: Prefix,
     tag: Cow<'a, str>,
@@ -57,6 +87,10 @@ pub struct Token<'a> {
 }
 
 impl<'a> Token<'a> {
+    fn new(token: Cow<'a, str>, suffix: bool, delimiter: Cow<'a,str>) -> Self{
+        let prefix = 
+    }
+
     /// Check whether the prefix is allowed or not
     fn is_valid(&self) -> Result<bool, InvalidTokenError> {
         match &self.allowed_prefix {
@@ -86,16 +120,8 @@ impl<'a> Token<'a> {
     fn get_allowed_prefixes_owned(&'a self) -> Option<Vec<Prefix>> {
         self.allowed_prefix.clone()
     }
-    fn is_start(&self, prev: &Token) -> bool {
-        todo!()
-    }
-    fn is_inside(&self, prev: &Token) -> bool {
-        todo!()
-    }
-    fn is_end(&self, prev: &Token) -> bool {
-        todo!()
-    }
-    fn check_tag(&self, prev: &Token, cond: Tag) -> bool {
+    #[inline]
+    fn check_tag(&self, prev: &Token, cond: &Tag) -> bool {
         match cond {
             Tag::Any => true,
             Tag::Same if prev.tag == self.tag => true,
@@ -103,12 +129,20 @@ impl<'a> Token<'a> {
             _ => false,
         }
     }
-    /// """Check whether the prefix patterns are matched."""
+    /// Check whether the prefix patterns are matched.
     ///
     /// * `prev`: Previous token
     /// * `patterns`: Patterns to match the token against
-    fn check_patterns(&self, prev: &Token, outer: TokenWithPatterns, pattern_to_check: Pattern) -> bool {
-        let pattern = (self.prefix, prev.prefix,  );
+    fn check_patterns(&self, prev: &Token, patterns_to_check: &[(Prefix, Prefix, Tag)]) -> bool {
+        for (prev_prefix, current_prefix, tag_cond) in patterns_to_check {
+            if prev_prefix == &prev.prefix
+                && current_prefix == &self.prefix
+                && self.check_tag(prev, tag_cond)
+            {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -139,7 +173,16 @@ enum Pattern {
     End,
 }
 
-enum TokenWithPatterns<'a> {
+enum SchemeType {
+    IOB1,
+    IOE1,
+    IOB2,
+    IOE2,
+    IOBES,
+    BILOU,
+}
+
+enum Scheme<'a> {
     IOB1 { token: Token<'a> },
     IOE1 { token: Token<'a> },
     IOB2 { token: Token<'a> },
@@ -148,7 +191,7 @@ enum TokenWithPatterns<'a> {
     BILOU { token: Token<'a> },
 }
 
-impl<'a> TokenWithPatterns<'a> {
+impl<'a> Scheme<'a> {
     const IOB1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
     const IOB1_START_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
         (Prefix::O, Prefix::I, Tag::Any),
@@ -189,7 +232,7 @@ impl<'a> TokenWithPatterns<'a> {
     ];
 
     const IOB2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
-    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::Any, Prefix::I, Tag::Any)];
+    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::ANY, Prefix::I, Tag::Any)];
     const IOB2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
         (Prefix::I, Prefix::I, Tag::Same),
         (Prefix::I, Prefix::E, Tag::Same),
@@ -216,7 +259,7 @@ impl<'a> TokenWithPatterns<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
     ];
-    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::Any, Tag::Any)];
+    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::ANY, Tag::Any)];
 
     const IOBES_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::E, Prefix::B, Prefix::S];
@@ -227,19 +270,19 @@ impl<'a> TokenWithPatterns<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOBES_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::Any, Tag::Any),
-        (Prefix::E, Prefix::Any, Tag::Any),
+        (Prefix::S, Prefix::ANY, Tag::Any),
+        (Prefix::E, Prefix::ANY, Tag::Any),
     ];
     const IOBES_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::Any, Tag::Any),
-        (Prefix::E, Prefix::Any, Tag::Any),
+        (Prefix::S, Prefix::ANY, Tag::Any),
+        (Prefix::E, Prefix::ANY, Tag::Any),
     ];
 
     const BILOU_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::U, Prefix::B, Prefix::O];
     const BILOU_START_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::Any, Prefix::B, Tag::Any),
-        (Prefix::Any, Prefix::U, Tag::Any),
+        (Prefix::ANY, Prefix::B, Tag::Any),
+        (Prefix::ANY, Prefix::U, Tag::Any),
     ];
     const BILOU_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
         (Prefix::B, Prefix::I, Tag::Same),
@@ -248,8 +291,8 @@ impl<'a> TokenWithPatterns<'a> {
         (Prefix::I, Prefix::L, Tag::Same),
     ];
     const BILOU_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::U, Prefix::Any, Tag::Any),
-        (Prefix::L, Prefix::Any, Tag::Any),
+        (Prefix::U, Prefix::ANY, Tag::Any),
+        (Prefix::L, Prefix::ANY, Tag::Any),
     ];
     fn allowed_prefixes<'b>(&'a self) -> &'a [Prefix] {
         match self {
@@ -291,6 +334,63 @@ impl<'a> TokenWithPatterns<'a> {
             Self::BILOU { .. } => &Self::BILOU_END_PATTERNS,
         }
     }
+    fn new<'b: 'a>(scheme: SchemeType, token: Token<'b>) -> Self {
+        match scheme {
+            SchemeType::IOB1 => Scheme::IOB1 { token },
+            SchemeType::IOB2 => Scheme::IOB2 { token },
+            SchemeType::IOE1 => Scheme::IOE1 { token },
+            SchemeType::IOE2 => Scheme::IOE2 { token },
+            SchemeType::IOBES => Scheme::IOBES { token },
+            SchemeType::BILOU => Scheme::BILOU { token },
+        }
+    }
+
+    fn is_start(&self, prev: &Token) -> bool {
+        match self {
+            Self::IOB1 { token } => token.check_patterns(prev, self.start_patterns()),
+            Self::IOB2 { token } => token.check_patterns(prev, self.start_patterns()),
+            Self::IOE1 { token } => token.check_patterns(prev, self.start_patterns()),
+            Self::IOE2 { token } => token.check_patterns(prev, self.start_patterns()),
+            Self::IOBES { token } => token.check_patterns(prev, self.start_patterns()),
+            Self::BILOU { token } => token.check_patterns(prev, self.start_patterns()),
+        }
+    }
+    fn is_inside(&self, prev: &Token) -> bool {
+        match self {
+            Self::IOB1 { token } => token.check_patterns(prev, self.inside_patterns()),
+            Self::IOB2 { token } => token.check_patterns(prev, self.inside_patterns()),
+            Self::IOE1 { token } => token.check_patterns(prev, self.inside_patterns()),
+            Self::IOE2 { token } => token.check_patterns(prev, self.inside_patterns()),
+            Self::IOBES { token } => token.check_patterns(prev, self.inside_patterns()),
+            Self::BILOU { token } => token.check_patterns(prev, self.inside_patterns()),
+        }
+    }
+    fn is_end(&self, prev: &Token) -> bool {
+        match self {
+            Self::IOB1 { token } => token.check_patterns(prev, self.end_patterns()),
+            Self::IOB2 { token } => token.check_patterns(prev, self.end_patterns()),
+            Self::IOE1 { token } => token.check_patterns(prev, self.end_patterns()),
+            Self::IOE2 { token } => token.check_patterns(prev, self.end_patterns()),
+            Self::IOBES { token } => token.check_patterns(prev, self.end_patterns()),
+            Self::BILOU { token } => token.check_patterns(prev, self.end_patterns()),
+        }
+    }
 }
 
-struct Tokens
+struct Tokens<'a> {
+    tokens: Vec<Cow<'a, str>>,
+    extended_tokens: Vec<Scheme<'a>>,
+    sent_id: Option<usize>,
+}
+impl<'a> Tokens<'a> {
+    fn new(
+        tokens: Vec<Cow<'a, str>>,
+        scheme: SchemeType,
+        delimiter: Cow<'a, str>,
+        sent_id: Option<usize>,
+    ) -> Self {
+        // let inner_token_prefix = 
+        // let outside_token_inner_token = Token{token: Cow::Borrowed("O"), };
+        let outside_token = Scheme::new(scheme, "O");
+    }
+}
