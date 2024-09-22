@@ -5,6 +5,8 @@
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
+use std::marker::PhantomData;
+use std::str::FromStr;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug, Hash, PartialEq, Clone)]
@@ -74,6 +76,32 @@ impl<'a> TryFrom<&'a str> for Prefix {
         }
     }
 }
+
+impl FromStr for Prefix {
+    type Err = ParsingPrefixError<&'static str>;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from_with_static_error(s)
+    }
+}
+
+impl<'a> Prefix {
+    fn try_from_with_static_error(
+        value: &'a str,
+    ) -> Result<Self, ParsingPrefixError<&'static str>> {
+        match value {
+            "I" => Ok(Prefix::I),
+            "O" => Ok(Prefix::O),
+            "B" => Ok(Prefix::B),
+            "E" => Ok(Prefix::E),
+            "S" => Ok(Prefix::S),
+            "U" => Ok(Prefix::U),
+            "L" => Ok(Prefix::L),
+            "ANY" => Ok(Prefix::ANY),
+            _ => Err(ParsingPrefixError(String::from(value).leak())),
+        }
+    }
+}
+
 impl TryFrom<String> for Prefix {
     type Error = ParsingPrefixError<String>;
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -99,12 +127,11 @@ enum Tag {
     Any,
 }
 
-#[derive(Debug, PartialEq, Hash)]
+#[derive(Debug, PartialEq, Hash, Clone)]
 struct InnerToken<'a> {
     token: Cow<'a, str>,
     prefix: Prefix,
     tag: Cow<'a, str>,
-    allowed_prefix: Option<Vec<Prefix>>,
 }
 
 // TODO: Move this enum into its own module, as to hide its `new` function.
@@ -131,10 +158,10 @@ impl UnicodeIndex {
 }
 
 impl<'a> InnerToken<'a> {
-    fn new<S: AsRef<str>>(
+    fn new(
         token: Cow<'a, str>,
         suffix: bool,
-        delimiter: Cow<'a, str>,
+        delimiter: char,
     ) -> Result<Self, ParsingPrefixError<&'a str>> {
         let ref_iter = token.graphemes(true);
         let unicode_index = UnicodeIndex::new(suffix, ref_iter);
@@ -142,31 +169,16 @@ impl<'a> InnerToken<'a> {
             .grapheme_indices(true)
             .nth(unicode_index.to_index())
             .ok_or(ParsingPrefixError("None"))?;
-        let prefix = Prefix::try_from(prefix_char)?;
+        let prefix = Prefix::try_from_with_static_error(prefix_char)?;
         let tag_before_strip = match unicode_index {
             UnicodeIndex::Start(_) => &token[char_index..],
             UnicodeIndex::End(_) => &token[..char_index],
         };
-        let tag = {
-
-        }
-
+        let tag = Cow::Owned(String::from(tag_before_strip.trim_matches(delimiter)));
+        Ok(Self { token, prefix, tag })
     }
 
     /// Check whether the prefix is allowed or not
-    fn is_valid(&self) -> Result<bool, InvalidTokenError> {
-        match &self.allowed_prefix {
-            None => Err(InvalidTokenError::from(self)),
-            Some(vec_of_allowed_prefixes) => {
-                let prefix_is_allowed = vec_of_allowed_prefixes.contains(&self.prefix);
-                if prefix_is_allowed {
-                    Ok(true)
-                } else {
-                    Err(InvalidTokenError::from(self))
-                }
-            }
-        }
-    }
     fn get_token_ref(&'a self) -> &'a str {
         &self.token
     }
@@ -175,12 +187,6 @@ impl<'a> InnerToken<'a> {
             Cow::Owned(owned_string) => owned_string.clone(),
             Cow::Borrowed(borrowed_string) => borrowed_string.to_string(),
         }
-    }
-    fn get_allowed_prefixes_ref(&'a self) -> &Option<Vec<Prefix>> {
-        &self.allowed_prefix
-    }
-    fn get_allowed_prefixes_owned(&'a self) -> Option<Vec<Prefix>> {
-        self.allowed_prefix.clone()
     }
     #[inline]
     fn check_tag(&self, prev: &InnerToken, cond: &Tag) -> bool {
@@ -212,33 +218,35 @@ impl<'a> InnerToken<'a> {
     }
 }
 
-#[derive(Debug, Hash)]
-struct InvalidTokenError(String, Option<Vec<Prefix>>);
-
-impl<'a> From<&InnerToken<'a>> for InvalidTokenError {
-    fn from(value: &InnerToken<'a>) -> Self {
-        InvalidTokenError(value.get_token_owned(), value.get_allowed_prefixes_owned())
-    }
-}
-
-impl Display for InvalidTokenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "The current token ({}) is not allowed. Only the following tokens are allowd: {:?}",
-            self.0, self.1
-        )
-    }
-}
-
-impl Error for InvalidTokenError {}
-
+// #[derive(Debug, Hash)]
+// struct InvalidTokenError(String, Option<Vec<Prefix>>);
+//
+// impl<'a> From<&InnerToken<'a>> for InvalidTokenError {
+//     fn from(value: &InnerToken<'a>) -> Self {
+//         InvalidTokenError(value.get_token_owned(), value.get_allowed_prefixes_owned())
+//     }
+// }
+//
+// impl Display for InvalidTokenError {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(
+//             f,
+//             "The current token ({}) is not allowed. Only the following tokens are allowd: {:?}",
+//             self.0, self.1
+//         )
+//     }
+// }
+//
+// impl Error for InvalidTokenError {}
+//
+#[derive(Debug, Clone, Copy)]
 enum Pattern {
     Start,
     Inside,
     End,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum SchemeType {
     IOB1,
     IOE1,
@@ -248,6 +256,7 @@ enum SchemeType {
     BILOU,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum Token<'a> {
     IOB1 { token: InnerToken<'a> },
     IOE1 { token: InnerToken<'a> },
@@ -411,6 +420,21 @@ impl<'a> Token<'a> {
         }
     }
 
+    fn inner(&self) -> &InnerToken {
+        match self {
+            Self::IOE1 { token } => &token,
+            Self::IOE2 { token } => &token,
+            Self::IOB1 { token } => &token,
+            Self::IOB2 { token } => &token,
+            Self::BILOU { token } => &token,
+            Self::IOBES { token } => &token,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        self.allowed_prefixes().contains(&self.inner().prefix)
+    }
+
     fn is_start(&self, prev: &InnerToken) -> bool {
         match self {
             Self::IOB1 { token } => token.check_patterns(prev, self.start_patterns()),
@@ -443,20 +467,78 @@ impl<'a> Token<'a> {
     }
 }
 
-struct Tokens<'a> {
-    tokens: Vec<Cow<'a, str>>,
+#[derive(Debug, Clone, Copy)]
+struct NotInit();
+#[derive(Debug, Clone, Copy)]
+struct Init();
+
+#[derive(Debug, Clone, PartialEq)]
+struct Tokens<'a, Init> {
     extended_tokens: Vec<Token<'a>>,
     sent_id: Option<usize>,
+    entities: Option<Vec<Entity<'a>>>,
+    init: PhantomData<Init>,
 }
-impl<'a> Tokens<'a> {
-    fn new(
+impl<'a> Tokens<'a, NotInit> {
+    pub fn new(
         tokens: Vec<Cow<'a, str>>,
         scheme: SchemeType,
-        delimiter: Cow<'a, str>,
+        suffix: bool,
+        delimiter: char,
         sent_id: Option<usize>,
-    ) -> Self {
+    ) -> Result<Self, ParsingPrefixError<&'a str>> {
         // let inner_token_prefix =
         // let outside_token_inner_token = Token{token: Cow::Borrowed("O"), };
-        let outside_token = Token::new(scheme, "O");
+        let inner_token = InnerToken::new(Cow::Borrowed("O"), suffix, delimiter)?;
+        let outside_token = Token::new(scheme, inner_token);
+        let mut tokens: Vec<Token> = tokens
+            .into_iter()
+            .map(|cow_str| {
+                let inner = InnerToken::new(cow_str, suffix, delimiter)?;
+                Ok::<Token, ParsingPrefixError<&'a str>>(Token::new(scheme, inner))
+            })
+            .collect::<Result<Vec<Token>, ParsingPrefixError<&'a str>>>()?;
+        tokens.push(outside_token); // Tokens are now extended_tokens
+        Ok(Self {
+            extended_tokens: tokens,
+            sent_id,
+            entities: None,
+            init: PhantomData,
+        })
+    }
+
+    /// Extract the entities from the Tokens.
+    pub(crate) fn entities(self) -> Tokens<'a, Init> {
+        let i = 0;
+    }
+
+    /// Returns the index of the next token not inside, starting from the `start` index.
+    ///
+    /// * `start`: Indexing at which we are starting to look for a token not inside.
+    /// * `prev`: Previous token. This token is necessary to know if the token at index `start` is
+    /// inside or not.
+    fn forward(&self, start: usize, prev: &Token<'a>) -> usize {
+        let slice_of_interest = &self.extended_tokens[start..];
+        let len_of_slice_of_interest = slice_of_interest.len();
+        let mut counter = start; // copies the start index
+        let mut swap_token = prev;
+        loop {
+            let current_token = &slice_of_interest[counter];
+            if current_token.is_inside(swap_token.inner()) {
+                swap_token = &current_token;
+            } else {
+                return counter;
+            }
+            counter += 1;
+            if counter >= len_of_slice_of_interest {
+                break self.extended_tokens.len() - 1;
+            }
+        }
+    }
+
+    fn is_end(&self, i: usize) -> bool {
+        let token = &self.extended_tokens[i];
+        let prev = &self.extended_tokens[i - 1];
+        token.is_end(prev.inner())
     }
 }
