@@ -6,6 +6,8 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
 use std::marker::PhantomData;
+use std::mem::replace;
+use std::mem::swap;
 use std::mem::take;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -461,6 +463,19 @@ impl<'a> Token<'a> {
             Self::IOBES { token } => &token,
         }
     }
+    fn inner_mut(&'a mut self) -> &'a mut InnerToken {
+        match self {
+            Self::IOE1 { token } => token,
+            Self::IOE2 { token } => token,
+            Self::IOB1 { token } => token,
+            Self::IOB2 { token } => token,
+            Self::BILOU { token } => token,
+            Self::IOBES { token } => token,
+        }
+    }
+    // fn switch_tag<'b: 'a>(&'a mut self, other: Cow<'b, str>) -> Cow<'b, str> {
+    //     replace(&mut self.inner().tag, other)
+    // }
 
     fn is_valid(&self) -> bool {
         self.allowed_prefixes().contains(&self.inner().prefix)
@@ -505,9 +520,8 @@ struct Init();
 
 #[derive(Debug, Clone, PartialEq)]
 struct Tokens<'a, Init> {
-    extended_tokens: Option<Vec<Token<'a>>>,
+    extended_tokens: Vec<Token<'a>>,
     sent_id: Option<usize>,
-    entities: Option<Vec<Entity<'a>>>,
     init: PhantomData<Init>,
 }
 impl<'a> Tokens<'a, NotInit> {
@@ -531,65 +545,69 @@ impl<'a> Tokens<'a, NotInit> {
             .collect::<Result<Vec<Token>, ParsingPrefixError<&'a str>>>()?;
         tokens.push(outside_token); // Tokens are now extended_tokens
         Ok(Self {
-            extended_tokens: Some(tokens),
+            extended_tokens: tokens,
             sent_id,
-            entities: None,
             init: PhantomData,
         })
     }
 
     /// Extract the entities from the Tokens.
-    pub(crate) fn entities(self) -> Result<Tokens<'a, Init>, Box<dyn Error>> {
+    pub(crate) fn entities(self) -> Result<Vec<Entity<'a>>, Box<dyn Error>> {
         let mut i = 0;
-        let mut entities: Vec<Entity> = vec![];
-        let rc_extended_tokens = Rc::new(self.extended_tokens.unwrap()); // Can unwrap because we are in the
-                                                                         // NotInit impl block
-        let num_extended_tokens = rc_extended_tokens.len();
-        let mut prev = rc_extended_tokens.last().ok_or_else(|| {
-            format!(
-                "This Tokens struct does not contains any token. self.extended_tokens: {:?}",
-                rc_extended_tokens
-            )
+        let mut prev: &Token = self.extended_tokens.get(0).ok_or_else(|| {
+            Box::new(Err(
+                "Trying to convert an empty list of tokens into a list of entities",
+            ))
         })?;
-        while i < num_extended_tokens {
-            let token = unsafe { rc_extended_tokens.get_unchecked(i) }; // Safe due to us always making sure i<num_extended_tokens
-            if !token.is_valid() {
-                return Err(Box::new(InvalidToken(token.inner().token.to_string())));
-            }
-            if token.is_start(prev.inner()) {
-                let end = Self::unassociated_forward(
-                    i + 1,
-                    &token,
-                    rc_extended_tokens.as_ref(),
-                    num_extended_tokens,
-                );
-                if Self::unassociated_is_end(end, &rc_extended_tokens) {
-                    let entity = Entity {
-                        sent_id: match &self.sent_id {
-                            Some(i) => Some(*i),
-                            None => None,
-                        },
-                        start: i,
-                        end,
-                        tag: match &token.inner().tag {
-                            Cow::Owned(owned_string) => Cow::Owned(owned_string.clone()),
-                            Cow::Borrowed(ref_string) => Cow::Borrowed(*ref_string),
-                        },
-                    };
-                    entities.push(entity)
-                }
-                i = end;
-            } else {
-                i += 1;
-            }
-            prev = &rc_extended_tokens[i - 1];
-        }
-        Ok(Tokens {
-            entities: Some(entities),
-            extended_tokens: None,
-            sent_id: None,
-            init: PhantomData,
-        })
+        // let mut entities: Vec<Entity> = vec![];
+        // let rc_extended_tokens = Rc::new(self.extended_tokens.unwrap()); // Can unwrap because we are in the
+        //                                                                  // NotInit impl block
+        // let num_extended_tokens = rc_extended_tokens.len();
+        // let mut prev = rc_extended_tokens.last().ok_or_else(|| {
+        //     format!(
+        //         "This Tokens struct does not contains any token. self.extended_tokens: {:?}",
+        //         rc_extended_tokens
+        //     )
+        // })?;
+        // while i < num_extended_tokens {
+        //     let token = unsafe { rc_extended_tokens.get_unchecked(i) }; // Safe due to us always making sure i<num_extended_tokens
+        //     if !token.is_valid() {
+        //         return Err(Box::new(InvalidToken(token.inner().token.to_string())));
+        //     }
+        //     if token.is_start(prev.inner()) {
+        //         let end = Self::unassociated_forward(
+        //             i + 1,
+        //             &token,
+        //             rc_extended_tokens.as_ref(),
+        //             num_extended_tokens,
+        //         );
+        //         if Self::unassociated_is_end(end, &rc_extended_tokens) {
+        //             let entity = Entity {
+        //                 sent_id: match &self.sent_id {
+        //                     Some(i) => Some(*i),
+        //                     None => None,
+        //                 },
+        //                 start: i,
+        //                 end,
+        //                 tag: match &token.inner().tag {
+        //                     Cow::Owned(owned_string) => Cow::Owned(owned_string.clone()),
+        //                     Cow::Borrowed(ref_string) => Cow::Borrowed(*ref_string),
+        //                 },
+        //             };
+        //             entities.push(entity)
+        //         }
+        //         i = end;
+        //     } else {
+        //         i += 1;
+        //     }
+        //     prev = &rc_extended_tokens[i - 1];
+        // }
+        // Ok(Tokens {
+        //     entities: Some(entities),
+        //     extended_tokens: None,
+        //     sent_id: None,
+        //     init: PhantomData,
+        // })
     }
 
     /// Returns the index of the next token not inside, starting from the `start` index.
@@ -653,5 +671,44 @@ impl<'a> Tokens<'a, NotInit> {
 
     fn extended_tokens(&'a self) -> &'a Vec<Token<'a>> {
         self.extended_tokens.as_ref().unwrap()
+    }
+}
+
+/// Iterator for iterating over the entities of a Tokens struct
+///
+/// * `index`: Index of the current iteration
+/// * `current`: Current token
+/// * `prev`:  Previous token
+/// * `prev_prev`: Previous token of the previous token
+struct Entities<'a> {
+    index: usize,
+    tokens: Tokens<'a, NotInit>,
+    current: &'a mut Token<'a>,
+    prev: &'a Token<'a>,
+    prev_prev: &'a Token<'a>,
+}
+impl<'a> Iterator for Entities<'a> {
+    type Item = Result<Entity<'a>, Box<dyn Error>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let res: Option<Result<Entity<'a>, Box<dyn Error>>>;
+        self.current.is_valid().then_some({
+            if self.current.is_start(self.prev.inner()) {
+                let end = self.tokens.forward(self.index + 1, self.prev);
+                if self.tokens.is_end(end) {
+                    let entity = Entity {
+                        sent_id: self.tokens.sent_id,
+                        start: self.index,
+                        end,
+                        tag: replace(&mut self.current.inner_mut().tag, Cow::Borrowed("")),
+                    };
+                }
+            }
+        });
+        res = Some(Err(Box::new(InvalidToken(
+            self.current.inner().token.to_string(),
+        ))));
+        self.index += 1;
+        //TODO: Self.current becomes previous, current becomes tokens[index]
+        res
     }
 }
