@@ -9,7 +9,6 @@ use std::marker::PhantomData;
 use std::mem::replace;
 use std::mem::swap;
 use std::mem::take;
-use std::rc::Rc;
 use std::str::FromStr;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -290,6 +289,12 @@ enum Token<'a> {
     IOBES { token: InnerToken<'a> },
     BILOU { token: InnerToken<'a> },
 }
+// impl<'a> Default for &'a mut Token<'a> {
+//     fn default() -> Self {
+//         // let token: InnerToken = InnerToken::default();
+//         Token::BILOU{token: InnerToken::default()}
+//     }
+// }
 
 impl<'a> Default for Token<'a> {
     fn default() -> Self {
@@ -473,9 +478,6 @@ impl<'a> Token<'a> {
             Self::IOBES { token } => token,
         }
     }
-    // fn switch_tag<'b: 'a>(&'a mut self, other: Cow<'b, str>) -> Cow<'b, str> {
-    //     replace(&mut self.inner().tag, other)
-    // }
 
     fn is_valid(&self) -> bool {
         self.allowed_prefixes().contains(&self.inner().prefix)
@@ -509,6 +511,16 @@ impl<'a> Token<'a> {
             Self::IOE2 { token } => token.check_patterns(prev, self.end_patterns()),
             Self::IOBES { token } => token.check_patterns(prev, self.end_patterns()),
             Self::BILOU { token } => token.check_patterns(prev, self.end_patterns()),
+        }
+    }
+    fn take_tag(&mut self) -> Cow<'_, str> {
+        match self {
+            Self::IOB1 { token } => take(&mut token.tag),
+            Self::IOE1 { token } => take(&mut token.tag),
+            Self::IOB2 { token } => take(&mut token.tag),
+            Self::IOE2 { token } => take(&mut token.tag),
+            Self::IOBES { token } => take(&mut token.tag),
+            Self::BILOU { token } => take(&mut token.tag),
         }
     }
 }
@@ -549,65 +561,6 @@ impl<'a> Tokens<'a, NotInit> {
             sent_id,
             init: PhantomData,
         })
-    }
-
-    /// Extract the entities from the Tokens.
-    pub(crate) fn entities(self) -> Result<Vec<Entity<'a>>, Box<dyn Error>> {
-        let mut i = 0;
-        let mut prev: &Token = self.extended_tokens.get(0).ok_or_else(|| {
-            Box::new(Err(
-                "Trying to convert an empty list of tokens into a list of entities",
-            ))
-        })?;
-        // let mut entities: Vec<Entity> = vec![];
-        // let rc_extended_tokens = Rc::new(self.extended_tokens.unwrap()); // Can unwrap because we are in the
-        //                                                                  // NotInit impl block
-        // let num_extended_tokens = rc_extended_tokens.len();
-        // let mut prev = rc_extended_tokens.last().ok_or_else(|| {
-        //     format!(
-        //         "This Tokens struct does not contains any token. self.extended_tokens: {:?}",
-        //         rc_extended_tokens
-        //     )
-        // })?;
-        // while i < num_extended_tokens {
-        //     let token = unsafe { rc_extended_tokens.get_unchecked(i) }; // Safe due to us always making sure i<num_extended_tokens
-        //     if !token.is_valid() {
-        //         return Err(Box::new(InvalidToken(token.inner().token.to_string())));
-        //     }
-        //     if token.is_start(prev.inner()) {
-        //         let end = Self::unassociated_forward(
-        //             i + 1,
-        //             &token,
-        //             rc_extended_tokens.as_ref(),
-        //             num_extended_tokens,
-        //         );
-        //         if Self::unassociated_is_end(end, &rc_extended_tokens) {
-        //             let entity = Entity {
-        //                 sent_id: match &self.sent_id {
-        //                     Some(i) => Some(*i),
-        //                     None => None,
-        //                 },
-        //                 start: i,
-        //                 end,
-        //                 tag: match &token.inner().tag {
-        //                     Cow::Owned(owned_string) => Cow::Owned(owned_string.clone()),
-        //                     Cow::Borrowed(ref_string) => Cow::Borrowed(*ref_string),
-        //                 },
-        //             };
-        //             entities.push(entity)
-        //         }
-        //         i = end;
-        //     } else {
-        //         i += 1;
-        //     }
-        //     prev = &rc_extended_tokens[i - 1];
-        // }
-        // Ok(Tokens {
-        //     entities: Some(entities),
-        //     extended_tokens: None,
-        //     sent_id: None,
-        //     init: PhantomData,
-        // })
     }
 
     /// Returns the index of the next token not inside, starting from the `start` index.
@@ -670,7 +623,8 @@ impl<'a> Tokens<'a, NotInit> {
     }
 
     fn extended_tokens(&'a self) -> &'a Vec<Token<'a>> {
-        self.extended_tokens.as_ref().unwrap()
+        let res: &Vec<Token> = self.extended_tokens.as_ref();
+        res
     }
 }
 
@@ -684,14 +638,19 @@ struct Entities<'a> {
     index: usize,
     tokens: Tokens<'a, NotInit>,
     current: &'a mut Token<'a>,
-    prev: &'a Token<'a>,
-    prev_prev: &'a Token<'a>,
+    prev: &'a mut Token<'a>,
 }
 impl<'a> Iterator for Entities<'a> {
     type Item = Result<Entity<'a>, Box<dyn Error>>;
     fn next(&mut self) -> Option<Self::Item> {
         let res: Option<Result<Entity<'a>, Box<dyn Error>>>;
-        self.current.is_valid().then_some({
+        let current: &Token = &self.tokens.extended_tokens[self.index];
+        let prev: &Token = &self.tokens.extended_tokens[self.index-1];
+        if self.current.is_valid() {
+            //TODO: Switch to iterator style ?
+            while !self.current.is_start(){
+                
+            }
             if self.current.is_start(self.prev.inner()) {
                 let end = self.tokens.forward(self.index + 1, self.prev);
                 if self.tokens.is_end(end) {
@@ -699,16 +658,18 @@ impl<'a> Iterator for Entities<'a> {
                         sent_id: self.tokens.sent_id,
                         start: self.index,
                         end,
-                        tag: replace(&mut self.current.inner_mut().tag, Cow::Borrowed("")),
+                        tag: self.current.take_tag(),
                     };
+                    res = Some(Ok(entity));
                 }
+                self.index += 1;
             }
-        });
-        res = Some(Err(Box::new(InvalidToken(
-            self.current.inner().token.to_string(),
-        ))));
+        } else {
+            res = Some(Err(Box::new(InvalidToken(
+                self.current.inner().token.to_string(),
+            ))));
+        }
         self.index += 1;
-        //TODO: Self.current becomes previous, current becomes tokens[index]
         res
     }
 }
