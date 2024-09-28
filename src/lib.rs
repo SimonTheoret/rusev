@@ -646,7 +646,7 @@ impl<'a> Tokens<'a> {
 /// * `prev_prev`: Previous token of the previous token
 struct EntitiesAdaptor<'a> {
     index: usize,
-    tokens: RefCell<Tokens<'a>>,
+    tokens: Tokens<'a>,
     len: usize,
     // current: &'a mut Token<'a>,
     // prev: &'a mut Token<'a>,
@@ -658,7 +658,7 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
             return None;
         }
         let mut_tokens: &mut Tokens = &mut self.tokens;
-        let (current_pre_ref_cell, prev) = unsafe { Self::take_out_pair(&self.tokens, self.index) };
+        let (current_pre_ref_cell, prev) = unsafe { Self::take_out_pair(mut_tokens, self.index) };
         let current = RefCell::new(current_pre_ref_cell);
         let borrowed_current = current.borrow();
         let is_valid = borrowed_current.is_valid();
@@ -668,12 +668,12 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
             )))))
         } else {
             if borrowed_current.is_start(prev.inner()) {
-                let end = self.tokens.borrow().forward(self.index, &prev);
-                if self.tokens.borrow().is_end(end) {
+                let end = mut_tokens.forward(self.index, &prev);
+                if mut_tokens.is_end(end) {
                     drop(borrowed_current);
                     let tag = current.into_inner().take_tag();
                     let entity = Entity {
-                        sent_id: self.tokens.borrow().sent_id,
+                        sent_id: mut_tokens.sent_id,
                         start: self.index,
                         end,
                         tag,
@@ -702,11 +702,10 @@ impl<'a> EntitiesAdaptor<'a> {
     /// its extended_tokens field.
     /// * `index`: Index specifying the current token. `index-1` is used to take the previous
     /// token.
-    unsafe fn take_out_pair(tokens: &RefCell<Tokens<'a>>, index: usize) -> (Token<'a>, Token<'a>) {
-        let current_token = take(tokens.borrow_mut().extended_tokens.get_unchecked_mut(index));
+    unsafe fn take_out_pair(tokens: &mut Tokens<'a>, index: usize) -> (Token<'a>, Token<'a>) {
+        let current_token = take(tokens.extended_tokens.get_unchecked_mut(index));
         let previous_token = take(
             tokens
-                .borrow_mut()
                 .extended_tokens
                 .get_unchecked_mut(index - 1),
         );
@@ -716,7 +715,7 @@ impl<'a> EntitiesAdaptor<'a> {
         let len = tokens.extended_tokens.len();
         Self {
             index: 1,
-            tokens: RefCell::new(tokens),
+            tokens,
             len ,
         }
     }
