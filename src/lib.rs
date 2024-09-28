@@ -171,14 +171,14 @@ enum UnicodeIndex {
     End(usize),
 }
 impl UnicodeIndex {
-    pub(crate) fn new<I: Iterator>(suffix: bool, unicode_iterator: I) -> Self {
+     fn new<I: Iterator>(suffix: bool, unicode_iterator: I) -> Self {
         if !suffix {
             UnicodeIndex::Start(0)
         } else {
             UnicodeIndex::End(unicode_iterator.count())
         }
     }
-    pub(crate) fn to_index(&self) -> usize {
+     fn to_index(&self) -> usize {
         match self {
             Self::Start(start) => *start,
             Self::End(end) => *end,
@@ -206,7 +206,7 @@ impl<'a> InnerToken<'a> {
             .ok_or(ParsingPrefixError("None"))?;
         let prefix = Prefix::try_from_with_static_error(prefix_char)?;
         let tag_before_strip = match unicode_index {
-            UnicodeIndex::Start(_) => &token[char_index..],
+            UnicodeIndex::Start(_) => &token[char_index + 1..],
             UnicodeIndex::End(_) => &token[..char_index],
         };
         let tag = Cow::Owned(String::from(tag_before_strip.trim_matches(delimiter)));
@@ -657,6 +657,7 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
         if self.index >= self.len {
             return None;
         }
+        let mut_tokens: &mut Tokens = &mut self.tokens;
         let (current_pre_ref_cell, prev) = unsafe { Self::take_out_pair(&self.tokens, self.index) };
         let current = RefCell::new(current_pre_ref_cell);
         let borrowed_current = current.borrow();
@@ -670,10 +671,7 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
                 let end = self.tokens.borrow().forward(self.index, &prev);
                 if self.tokens.borrow().is_end(end) {
                     drop(borrowed_current);
-                    let tag = match current.into_inner().take_tag() {
-                        Cow::Owned(owned_string) => Cow::Owned(owned_string),
-                        Cow::Borrowed(ref_string) => Cow::Borrowed(ref_string),
-                    };
+                    let tag = current.into_inner().take_tag();
                     let entity = Entity {
                         sent_id: self.tokens.borrow().sent_id,
                         start: self.index,
@@ -693,54 +691,17 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
         }
     }
 }
-// let res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
-// if self.index >= self.len {
-//     return None;
-// }
-// let (current, prev) = unsafe {
-//     let (current_pre_ref_cell, prev, next_token) = self.tokens.take_out_trio(self.index);
-//     let current = RefCell::new(current_pre_ref_cell);
-//     (current, prev)
-// };
-// let is_valid = current.borrow().is_valid();
-// if is_valid {
-//     // Replace following condition by a call to lazy_verify_conds
-//     let (is_start, is_end, end) = self.lazy_verify_conds(&current.borrow(), &prev);
-//     if is_start && is_end {
-//         // NOTE: is this drop necessary?
-//         drop(is_valid);
-//         let token_with_tag = current.into_inner();
-//         let tag = token_with_tag.take_tag();
-//         let entity = Entity {
-//             sent_id: self.tokens.sent_id,
-//             start: self.index,
-//             end,
-//             tag,
-//         };
-//         res = Some(Some(Ok(entity)));
-//     } else {
-//         res = Some(None)
-//     }
-// } else {
-//     res = Some(Some(Err(Box::new(InvalidToken(
-//         current.into_inner().inner().token.to_string(),
-//     )))));
-// }
-// self.index += 1;
-// res?
 impl<'a> EntitiesAdaptor<'a> {
-    // fn lazy_verify_conds(&self, current: &Token, prev: &Token) -> (bool, bool, usize) {
-    //     let is_start = current.is_start(prev.inner());
-    //     if is_start {
-    //         let end = self.tokens.forward(self.index + 1, prev);
-    //         let is_end = self.tokens.is_end(end);
-    //         drop(current);
-    //         (is_start, is_end, end)
-    //     } else {
-    //         drop(current);
-    //         (is_start, false, 0)
-    //     }
-    // }
+    /// Takes out the current and previous tokens (in that order) when given an index. The index
+    /// must be >= 1 and < tokens.len() or this function will result in UB. Calling this function
+    /// with an already use index will result in default tokens.
+    ///
+    /// SAFETY: The index must be >= 1 and < tokens.len(), or this function will result in UB.
+    ///
+    /// * `tokens`: RefCell wrapping the tokens. The current and previous tokens are extracted from
+    /// its extended_tokens field.
+    /// * `index`: Index specifying the current token. `index-1` is used to take the previous
+    /// token.
     unsafe fn take_out_pair(tokens: &RefCell<Tokens<'a>>, index: usize) -> (Token<'a>, Token<'a>) {
         let current_token = take(tokens.borrow_mut().extended_tokens.get_unchecked_mut(index));
         let previous_token = take(
@@ -751,6 +712,14 @@ impl<'a> EntitiesAdaptor<'a> {
         );
         (current_token, previous_token)
     }
+    fn new(tokens: Tokens<'a>) -> Self{
+        let len = tokens.extended_tokens.len();
+        Self {
+            index: 1,
+            tokens: RefCell::new(tokens),
+            len ,
+        }
+    }
 }
 
 // struct Entities
@@ -758,7 +727,12 @@ impl<'a> EntitiesAdaptor<'a> {
 mod test {
     use super::*;
     #[test]
-    fn test_entity_adaptor_iterator() {}
+    fn test_entity_adaptor_iterator() {
+        let tokens = build_tokens();
+        let first_entity = EntitiesAdaptor::new(tokens).next();
+        let tokens_entities = [('PER', 0, 2), ('LOC', 3, 4)];
+        assert_eq!(first_entity, tokens_entities[0]);
+    }
     #[test]
     fn test_new_tokens() {
         let tokens = build_tokens();
