@@ -19,11 +19,9 @@
 //! case: when a chunk comes after an O tag, the first token of the chunk takes the I- prefix.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::error::Error;
 use std::fmt::Display;
-use std::marker::PhantomData;
-use std::mem::replace;
-use std::mem::swap;
 use std::mem::take;
 use std::str::FromStr;
 use unicode_segmentation::UnicodeSegmentation;
@@ -529,7 +527,7 @@ impl<'a> Token<'a> {
             Self::BILOU { token } => token.check_patterns(prev, self.end_patterns()),
         }
     }
-    fn take_tag(&mut self) -> Cow<'_, str> {
+    fn take_tag(&mut self) -> Cow<'a, str> {
         match self {
             Self::IOB1 { token } => take(&mut token.tag),
             Self::IOE1 { token } => take(&mut token.tag),
@@ -541,18 +539,12 @@ impl<'a> Token<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct NotInit();
-#[derive(Debug, Clone, Copy)]
-struct Init();
-
 #[derive(Debug, Clone, PartialEq)]
-struct Tokens<'a, Init> {
+struct Tokens<'a> {
     extended_tokens: Vec<Token<'a>>,
     sent_id: Option<usize>,
-    init: PhantomData<Init>,
 }
-impl<'a> Tokens<'a, NotInit> {
+impl<'a> Tokens<'a> {
     pub fn new(
         tokens: Vec<Cow<'a, str>>,
         scheme: SchemeType,
@@ -575,7 +567,6 @@ impl<'a> Tokens<'a, NotInit> {
         Ok(Self {
             extended_tokens: tokens,
             sent_id,
-            init: PhantomData,
         })
     }
 
@@ -647,63 +638,116 @@ impl<'a> Tokens<'a, NotInit> {
 /// * `prev_prev`: Previous token of the previous token
 struct EntitiesAdaptor<'a> {
     index: usize,
-    tokens: Tokens<'a, NotInit>,
+    tokens: RefCell<Tokens<'a>>,
     len: usize,
     // current: &'a mut Token<'a>,
     // prev: &'a mut Token<'a>,
 }
 impl<'a> Iterator for EntitiesAdaptor<'a> {
-    type Item = Result<Entity<'a>, Box<dyn Error>>;
+    type Item = Option<Result<Entity<'a>, Box<dyn Error>>>;
     fn next(&mut self) -> Option<Self::Item> {
-        let res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
-        if self.index > self.len {
+        if self.index >= self.len {
             return None;
         }
-        let (current, prev) = unsafe {
-            let current = self.tokens.extended_tokens().get_unchecked(self.index);
-            let prev = self.tokens.extended_tokens().get_unchecked(self.index - 1);
-            (current, prev)
-        };
-        if current.is_valid() {
-            // Replace following condition by a call to lazy_verify_conds
-            let (is_start, is_end, end) = self.lazy_verify_conds(current, prev);
-            if is_start && is_end {
-                drop(current);
-                let entity = Entity {
-                    sent_id: self.tokens.sent_id,
-                    start: self.index,
-                    end,
-                    tag: self
-                        .tokens
-                        .extended_tokens()
-                        .get_mut(self.index)
-                        .unwrap()
-                        .take_tag(),
-                };
-                res = Some(Some(Ok(entity)));
-            } else {
-                res = Some(None)
-            }
+        let (current_pre_ref_cell, prev) = unsafe { Self::take_out_pair(&self.tokens, self.index) };
+        let current = RefCell::new(current_pre_ref_cell);
+        let borrowed_current = current.borrow();
+        let is_valid = borrowed_current.is_valid();
+        if !is_valid {
+            Some(Some(Err(Box::new(InvalidToken(
+                borrowed_current.inner().token.to_string(),
+            )))))
         } else {
-            res = Some(Some(Err(Box::new(InvalidToken(
-                current.inner().token.to_string(),
-            )))));
+            if borrowed_current.is_start(prev.inner()) {
+                let end = self.tokens.borrow().forward(self.index, &prev);
+                if self.tokens.borrow().is_end(end) {
+                    drop(borrowed_current);
+                    let tag = match current.into_inner().take_tag() {
+                        Cow::Owned(owned_string) => Cow::Owned(owned_string),
+                        Cow::Borrowed(ref_string) => Cow::Borrowed(ref_string),
+                    };
+                    let entity = Entity {
+                        sent_id: self.tokens.borrow().sent_id,
+                        start: self.index,
+                        end,
+                        tag,
+                    };
+                    self.index = end;
+                    return Some(Some(Ok(entity)));
+                } else {
+                    self.index += 1;
+                    return Some(None);
+                }
+            } else {
+                self.index += 1;
+                Some(None)
+            }
         }
-        self.index += 1;
-        res?
     }
 }
+// let res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
+// if self.index >= self.len {
+//     return None;
+// }
+// let (current, prev) = unsafe {
+//     let (current_pre_ref_cell, prev, next_token) = self.tokens.take_out_trio(self.index);
+//     let current = RefCell::new(current_pre_ref_cell);
+//     (current, prev)
+// };
+// let is_valid = current.borrow().is_valid();
+// if is_valid {
+//     // Replace following condition by a call to lazy_verify_conds
+//     let (is_start, is_end, end) = self.lazy_verify_conds(&current.borrow(), &prev);
+//     if is_start && is_end {
+//         // NOTE: is this drop necessary?
+//         drop(is_valid);
+//         let token_with_tag = current.into_inner();
+//         let tag = token_with_tag.take_tag();
+//         let entity = Entity {
+//             sent_id: self.tokens.sent_id,
+//             start: self.index,
+//             end,
+//             tag,
+//         };
+//         res = Some(Some(Ok(entity)));
+//     } else {
+//         res = Some(None)
+//     }
+// } else {
+//     res = Some(Some(Err(Box::new(InvalidToken(
+//         current.into_inner().inner().token.to_string(),
+//     )))));
+// }
+// self.index += 1;
+// res?
 impl<'a> EntitiesAdaptor<'a> {
-    fn lazy_verify_conds(&self, current: &Token, prev: &Token) -> (bool, bool, usize) {
-        let is_start = current.is_start(prev.inner());
-        if is_start {
-            let end = self.tokens.forward(self.index + 1, prev);
-            let is_end = self.tokens.is_end(end);
-            (is_start, is_end, end)
-        } else {
-            (is_start, false, 0)
-        }
+    // fn lazy_verify_conds(&self, current: &Token, prev: &Token) -> (bool, bool, usize) {
+    //     let is_start = current.is_start(prev.inner());
+    //     if is_start {
+    //         let end = self.tokens.forward(self.index + 1, prev);
+    //         let is_end = self.tokens.is_end(end);
+    //         drop(current);
+    //         (is_start, is_end, end)
+    //     } else {
+    //         drop(current);
+    //         (is_start, false, 0)
+    //     }
+    // }
+    unsafe fn take_out_pair(tokens: &RefCell<Tokens<'a>>, index: usize) -> (Token<'a>, Token<'a>) {
+        let current_token = take(tokens.borrow_mut().extended_tokens.get_unchecked_mut(index));
+        let previous_token = take(
+            tokens
+                .borrow_mut()
+                .extended_tokens
+                .get_unchecked_mut(index - 1),
+        );
+        (current_token, previous_token)
     }
 }
 
 // struct Entities
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_entity_adaptor_iterator() {}
+}
