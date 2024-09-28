@@ -639,49 +639,71 @@ impl<'a> Tokens<'a, NotInit> {
     }
 }
 
-/// Iterator for iterating over the entities of a Tokens struct
+/// Iterator and adaptor for iterating over the entities of a Tokens struct
 ///
 /// * `index`: Index of the current iteration
 /// * `current`: Current token
 /// * `prev`:  Previous token
 /// * `prev_prev`: Previous token of the previous token
-struct Entities<'a> {
+struct EntitiesAdaptor<'a> {
     index: usize,
     tokens: Tokens<'a, NotInit>,
-    current: &'a mut Token<'a>,
-    prev: &'a mut Token<'a>,
+    len: usize,
+    // current: &'a mut Token<'a>,
+    // prev: &'a mut Token<'a>,
 }
-impl<'a> Iterator for Entities<'a> {
+impl<'a> Iterator for EntitiesAdaptor<'a> {
     type Item = Result<Entity<'a>, Box<dyn Error>>;
     fn next(&mut self) -> Option<Self::Item> {
-        let res: Option<Result<Entity<'a>, Box<dyn Error>>>;
-        if self.current.is_valid() {
-            self.lazy_verify_conds();
+        let res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
+        if self.index > self.len {
+            return None;
+        }
+        let (current, prev) = unsafe {
+            let current = self.tokens.extended_tokens().get_unchecked(self.index);
+            let prev = self.tokens.extended_tokens().get_unchecked(self.index - 1);
+            (current, prev)
+        };
+        if current.is_valid() {
             // Replace following condition by a call to lazy_verify_conds
-            if self.current.is_start(self.prev.inner()) & {
-                let end = self.tokens.forward(self.index + 1, self.prev);
-                if self.tokens.is_end(end) {
-                    let entity = Entity {
-                        sent_id: self.tokens.sent_id,
-                        start: self.index,
-                        end,
-                        tag: self.current.take_tag(),
-                    };
-                    res = Some(Ok(entity));
-                }
-                self.index += 1;
+            let (is_start, is_end, end) = self.lazy_verify_conds(current, prev);
+            if is_start && is_end {
+                drop(current);
+                let entity = Entity {
+                    sent_id: self.tokens.sent_id,
+                    start: self.index,
+                    end,
+                    tag: self
+                        .tokens
+                        .extended_tokens()
+                        .get_mut(self.index)
+                        .unwrap()
+                        .take_tag(),
+                };
+                res = Some(Some(Ok(entity)));
+            } else {
+                res = Some(None)
             }
         } else {
-            res = Some(Err(Box::new(InvalidToken(
-                self.current.inner().token.to_string(),
-            ))));
+            res = Some(Some(Err(Box::new(InvalidToken(
+                current.inner().token.to_string(),
+            )))));
         }
         self.index += 1;
-        res
+        res?
     }
 }
-impl<'a> Entities<'a>{
-    fn lazy_verify_conds(&self) {
-        todo!()
+impl<'a> EntitiesAdaptor<'a> {
+    fn lazy_verify_conds(&self, current: &Token, prev: &Token) -> (bool, bool, usize) {
+        let is_start = current.is_start(prev.inner());
+        if is_start {
+            let end = self.tokens.forward(self.index + 1, prev);
+            let is_end = self.tokens.is_end(end);
+            (is_start, is_end, end)
+        } else {
+            (is_start, false, 0)
+        }
     }
 }
+
+// struct Entities
