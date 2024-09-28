@@ -1,6 +1,22 @@
 //! This library is  a re-implementation of the SeqEval library. SeqEval is built with python and
 //! is too slow when handling a large amount of strings. This library hopes to fulfill the same
 //! niche, but hopefully in a much more performant way.
+//! # SCHEMES
+//! The current schemes are supported:
+//! - IOB1: Here, I is a token inside a chunk, O is a token outside a chunk and B is the beginning
+//! of chunk immediately following another chunk of the same Named Entity.
+//! - IOB2: It is same as IOB1, except that a B tag is given for every token, which exists at the
+//! beginning of the chunk.
+//! - IOE1: An E tag used to mark the last token of a chunk immediately preceding another chunk of
+//! the same named entity.
+//! - IOE2: It is same as IOE1, except that an E tag is given for every token, which exists at the
+//! end of the chunk.
+//! - BILOU/IOBES: 'E' and 'L' denotes Last or Ending character in a sequence and 'S' denotes a single
+//! element  and 'U' a unit element.
+//! # NOTE ON B-TAG
+//! The B-prefix before a tag indicates that the tag is the beginning of a chunk that immediately
+//! follows another chunk of the same type without O tags between them. It is used only in that
+//! case: when a chunk comes after an O tag, the first token of the chunk takes the I- prefix.
 
 use std::borrow::Cow;
 use std::error::Error;
@@ -563,28 +579,23 @@ impl<'a> Tokens<'a, NotInit> {
         })
     }
 
-    /// Returns the index of the next token not inside, starting from the `start` index.
+    /// Returns the index of the next token not inside the current chunk, which is starting or
+    /// contains the token at `start` index.
     ///
     /// * `start`: Indexing at which we are starting to look for a token not inside.
     /// * `prev`: Previous token. This token is necessary to know if the token at index `start` is
     /// inside or not.
     fn forward(&self, start: usize, prev: &Token<'a>) -> usize {
         let slice_of_interest = &self.extended_tokens()[start..];
-        let len_of_slice_of_interest = slice_of_interest.len();
-        let mut counter = start; // copies the start index
         let mut swap_token = prev;
-        loop {
-            let current_token = &slice_of_interest[counter];
+        for (i, current_token) in slice_of_interest.iter().enumerate() {
             if current_token.is_inside(swap_token.inner()) {
                 swap_token = &current_token;
             } else {
-                return counter;
-            }
-            counter += 1;
-            if counter >= len_of_slice_of_interest {
-                break &self.extended_tokens().len() - 1;
+                return i + start;
             }
         }
+        return &self.extended_tokens.len() - 2;
     }
 
     fn unassociated_forward(
@@ -644,14 +655,10 @@ impl<'a> Iterator for Entities<'a> {
     type Item = Result<Entity<'a>, Box<dyn Error>>;
     fn next(&mut self) -> Option<Self::Item> {
         let res: Option<Result<Entity<'a>, Box<dyn Error>>>;
-        let current: &Token = &self.tokens.extended_tokens[self.index];
-        let prev: &Token = &self.tokens.extended_tokens[self.index-1];
         if self.current.is_valid() {
-            //TODO: Switch to iterator style ?
-            while !self.current.is_start(){
-                
-            }
-            if self.current.is_start(self.prev.inner()) {
+            self.lazy_verify_conds();
+            // Replace following condition by a call to lazy_verify_conds
+            if self.current.is_start(self.prev.inner()) & {
                 let end = self.tokens.forward(self.index + 1, self.prev);
                 if self.tokens.is_end(end) {
                     let entity = Entity {
@@ -671,5 +678,10 @@ impl<'a> Iterator for Entities<'a> {
         }
         self.index += 1;
         res
+    }
+}
+impl<'a> Entities<'a>{
+    fn lazy_verify_conds(&self) {
+        todo!()
     }
 }
