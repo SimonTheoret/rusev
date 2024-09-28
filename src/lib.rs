@@ -165,12 +165,14 @@ impl<'a> Default for InnerToken<'a> {
 ///
 /// This enum represents the positon of the Prefix in a token (a Cow<'_, str>).
 enum UnicodeIndex {
+    /// This variant indicates that the prefix is located at the start of the token
     Start(usize),
+    /// This variant indicates that the prefix is located at the end of the token
     End(usize),
 }
 impl UnicodeIndex {
     pub(crate) fn new<I: Iterator>(suffix: bool, unicode_iterator: I) -> Self {
-        if suffix {
+        if !suffix {
             UnicodeIndex::Start(0)
         } else {
             UnicodeIndex::End(unicode_iterator.count())
@@ -185,6 +187,12 @@ impl UnicodeIndex {
 }
 
 impl<'a> InnerToken<'a> {
+    /// Create InnerToken
+    ///
+    /// * `token`: str or String to parse the InnerToken from
+    /// * `suffix`: Marker indicating if prefix is located at the end (when suffix is true) or the
+    /// end (when suffix is false) of the token
+    /// * `delimiter`: Indicates the char used to separate the Prefix from the rest of the tag
     fn new(
         token: Cow<'a, str>,
         suffix: bool,
@@ -748,6 +756,40 @@ impl<'a> EntitiesAdaptor<'a> {
 // struct Entities
 #[cfg(test)]
 mod test {
+    use super::*;
     #[test]
     fn test_entity_adaptor_iterator() {}
+    #[test]
+    fn test_new_tokens() {
+        let tokens = build_tokens();
+        assert_eq!(tokens.extended_tokens.len(), 5);
+    }
+    #[test]
+    fn test_innertoken_new() {
+        let token = Cow::from("B-PER");
+        let suffix = false;
+        let delimiter = '-';
+        let inner_token = InnerToken::new(token, suffix, delimiter).unwrap();
+        let expected_inner_token = InnerToken {
+            token: Cow::Borrowed("B-PER"),
+            prefix: Prefix::B,
+            tag: Cow::Owned(String::from("PER")),
+        };
+        assert_eq!(inner_token, expected_inner_token)
+    }
+    fn build_tokens() -> Tokens<'static> {
+        let tokens = build_tokens_vec();
+        let scheme = SchemeType::IOB2;
+        let delimiter = '-';
+        let suffix = false;
+        Tokens::new(tokens, scheme, suffix, delimiter, None).unwrap()
+    }
+    fn build_tokens_vec() -> Vec<Cow<'static, str>> {
+        vec![
+            Cow::from("B-PER"),
+            Cow::from("I-PER"),
+            Cow::from("O"),
+            Cow::from("B-LOC"),
+        ]
+    }
 }
