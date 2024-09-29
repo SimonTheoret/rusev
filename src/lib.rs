@@ -367,10 +367,10 @@ impl<'a> Token<'a> {
     ];
 
     const IOB2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
-    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::ANY, Prefix::I, Tag::Any)];
+    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::ANY, Prefix::B, Tag::Any)];
     const IOB2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
+        (Prefix::B, Prefix::I, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
-        (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOB2_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
         (Prefix::I, Prefix::O, Tag::Any),
@@ -490,7 +490,7 @@ impl<'a> Token<'a> {
             Self::IOBES { token } => &token,
         }
     }
-    fn inner_mut(&'a mut self) -> &'a mut InnerToken {
+    fn inner_mut(&'a mut self) -> &mut InnerToken {
         match self {
             Self::IOE1 { token } => token,
             Self::IOE2 { token } => token,
@@ -555,26 +555,37 @@ struct ExtendedTokensIterator<'a> {
     scheme: SchemeType,
     suffix: bool,
     delimiter: char,
-    sent_id: Option<usize>,
     index: usize,
+    /// Total length to iterate over. This length is equal to outside_token.len()
     total_len: usize,
+}
+impl<'a> ExtendedTokensIterator<'a> {
+    /// The `PARTIAL_OFFSET` constant is the offset used during the iteration of the tokens
+    /// attribute. This is due to the use of the outside_token.
+    const PARTIAL_OFFSET: usize = 1;
 }
 impl<'a> Iterator for ExtendedTokensIterator<'a> {
     type Item = Result<Token<'a>, ParsingPrefixError<&'a str>>;
     fn next(&mut self) -> Option<Self::Item> {
         let ret: Option<Result<Token, ParsingPrefixError<&'a str>>>;
-        if self.index >= self.total_len {
+        if self.index > self.total_len {
             ret = None;
         } else if self.index == 0 {
             ret = Some(Ok(take(&mut self.outside_token)));
         } else {
-            let cow_str = unsafe { take(self.tokens.get_unchecked_mut(self.index)) };
+            let cow_str = unsafe {
+                take(
+                    self.tokens
+                        .get_unchecked_mut(self.index - Self::PARTIAL_OFFSET),
+                )
+            };
             let inner_token = InnerToken::new(cow_str, self.suffix, self.delimiter);
             ret = match inner_token {
                 Err(msg) => Some(Err(msg)),
                 Ok(res) => Some(Ok(Token::new(self.scheme, res))),
             };
         }
+        self.index += 1;
         ret
     }
 }
@@ -587,14 +598,13 @@ impl<'a> ExtendedTokensIterator<'a> {
         delimiter: char,
         sent_id: Option<usize>,
     ) -> Self {
-        let total_len = 1 + tokens.len();
+        let total_len = tokens.len();
         Self {
             outside_token,
             tokens,
             scheme,
             suffix,
             delimiter,
-            sent_id,
             index: 0,
             total_len,
         }
@@ -630,8 +640,8 @@ impl<'a> Tokens<'a> {
         }
     }
 
-    /// Returns the index of the next token not inside the current chunk, which is starting or
-    /// contains the token at `start` index.
+    /// Returns the index of the last token inside the current chunk when given a `start` index and
+    /// the previous token.
     ///
     /// * `start`: Indexing at which we are starting to look for a token not inside.
     /// * `prev`: Previous token. This token is necessary to know if the token at index `start` is
@@ -747,28 +757,61 @@ mod test {
     #[test]
     fn test_entity_adaptor_iterator() {
         let tokens = build_tokens();
-        // let first_entity = EntitiesAdaptor::new(tokens).next().unwrap().unwrap();
-        // .unwrap();
-        // print()
-        let expected_first_entity = Entity {
-            sent_id: None,
-            start: 0,
-            end: 2,
-            tag: Cow::Borrowed("PER"),
-        };
+        println!("{:?}", tokens);
+        let mut iter = EntitiesAdaptor::new(tokens.clone());
+        let first_entity = iter.next().unwrap();
+        println!("{:?}", first_entity);
+        assert!(first_entity.is_none());
+        let second_entity = iter.next().unwrap().unwrap(); /* .unwrap();  */
+        println!("{:?}", second_entity);
+        // assert_eq!(
+        //     second_entity,
+        //     Entity {
+        //         sent_id: None,
+        //         start: 1,
+        //         end: 2,
+        //         tag: Cow::Borrowed("PER")
+        //     }
+        // )
+
+        // let expected_first_entity = Entity {
+        //     sent_id: None,
+        //     start: 0,
+        //     end: 2,
+        //     tag: Cow::Borrowed("PER"),
+        // };
         // assert_eq!(first_entity, expected_first_entity);
+    }
+    #[test]
+    fn test_check_pattern() {
+        todo!();
+    }
+
+    #[test]
+    fn test_token_is_start() {
+        let tokens = build_tokens();
+        println!("{:?}", tokens);
+        println!("{:?}", tokens.extended_tokens());
+        let prev = tokens.extended_tokens().get(0).unwrap();
+        let is_start = tokens
+            .extended_tokens()
+            .get(1)
+            .unwrap()
+            .is_start(&prev.inner());
+        assert!(is_start)
     }
     #[test]
     fn test_forward_method() {
         let tokens = build_tokens();
         println!("{:?}", &tokens);
         let end = tokens.forward(1, tokens.extended_tokens.get(0).unwrap());
-        let expected_end = 3;
+        let expected_end = 1;
         assert_eq!(end, expected_end)
     }
     #[test]
     fn test_new_tokens() {
         let tokens = build_tokens();
+        println!("{:?}", tokens);
         assert_eq!(tokens.extended_tokens.len(), 5);
     }
     #[test]
