@@ -546,6 +546,60 @@ impl<'a> Token<'a> {
         }
     }
 }
+/// This struct a struct capable of building efficiently the Tokens with a given outside_token.
+/// This iterator avoids reallocation and keeps good ergonomic inside the `new` function of
+/// `Tokens`.
+struct ExtendedTokensIterator<'a> {
+    outside_token: Token<'a>,
+    tokens: Vec<Cow<'a, str>>,
+    scheme: SchemeType,
+    suffix: bool,
+    delimiter: char,
+    sent_id: Option<usize>,
+    index: usize,
+    total_len: usize,
+}
+impl<'a> Iterator for ExtendedTokensIterator<'a> {
+    type Item = Result<Token<'a>, ParsingPrefixError<&'a str>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret: Option<Result<Token, ParsingPrefixError<&'a str>>>;
+        if self.index >= self.total_len {
+            ret = None;
+        } else if self.index == 0 {
+            ret = Some(Ok(take(&mut self.outside_token)));
+        } else {
+            let cow_str = unsafe { take(self.tokens.get_unchecked_mut(self.index)) };
+            let inner_token = InnerToken::new(cow_str, self.suffix, self.delimiter);
+            ret = match inner_token {
+                Err(msg) => Some(Err(msg)),
+                Ok(res) => Some(Ok(Token::new(self.scheme, res))),
+            };
+        }
+        ret
+    }
+}
+impl<'a> ExtendedTokensIterator<'a> {
+    fn new(
+        outside_token: Token<'a>,
+        tokens: Vec<Cow<'a, str>>,
+        scheme: SchemeType,
+        suffix: bool,
+        delimiter: char,
+        sent_id: Option<usize>,
+    ) -> Self {
+        let total_len = 1 + tokens.len();
+        Self {
+            outside_token,
+            tokens,
+            scheme,
+            suffix,
+            delimiter,
+            sent_id,
+            index: 0,
+            total_len,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct Tokens<'a> {
@@ -564,25 +618,15 @@ impl<'a> Tokens<'a> {
         // let outside_token_inner_token = Token{token: Cow::Borrowed("O"), };
         let inner_token = InnerToken::new(Cow::Borrowed("O"), suffix, delimiter)?;
         let outside_token = Token::new(scheme, inner_token);
-        let mut extended_tokens = Vec::with_capacity(tokens.len() + 1);
-        extended_tokens.push(Ok(outside_token));
-        tokens
-            .into_iter()
-            .map(|cow_str| {
-                let inner = InnerToken::new(cow_str, suffix, delimiter)?;
-                Ok::<Token, ParsingPrefixError<&'a str>>(Token::new(scheme, inner))
-            })
-            .for_each(|rt| extended_tokens.push(rt));
-        if let Some(err) = extended_tokens.iter().find(|rt| match rt {
-            Err(_) => true,
-            Ok(_) => false,
-        }) {
-            return err; //WRONG TYPE?
-        } else {
-            Ok(Self {
-                extended_tokens,
+        let tokens_iter =
+            ExtendedTokensIterator::new(outside_token, tokens, scheme, suffix, delimiter, sent_id);
+        let extended_tokens: Result<Vec<Token>, ParsingPrefixError<&str>> = tokens_iter.collect();
+        match extended_tokens {
+            Err(prefix_error) => Err(prefix_error),
+            Ok(tokens) => Ok(Self {
+                extended_tokens: tokens,
                 sent_id,
-            })
+            }),
         }
     }
 
