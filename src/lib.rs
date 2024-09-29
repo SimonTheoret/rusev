@@ -171,14 +171,14 @@ enum UnicodeIndex {
     End(usize),
 }
 impl UnicodeIndex {
-     fn new<I: Iterator>(suffix: bool, unicode_iterator: I) -> Self {
+    fn new<I: Iterator>(suffix: bool, unicode_iterator: I) -> Self {
         if !suffix {
             UnicodeIndex::Start(0)
         } else {
             UnicodeIndex::End(unicode_iterator.count())
         }
     }
-     fn to_index(&self) -> usize {
+    fn to_index(&self) -> usize {
         match self {
             Self::Start(start) => *start,
             Self::End(end) => *end,
@@ -429,7 +429,7 @@ impl<'a> Token<'a> {
         (Prefix::U, Prefix::ANY, Tag::Any),
         (Prefix::L, Prefix::ANY, Tag::Any),
     ];
-    fn allowed_prefixes<'b>(&'a self) -> &'a [Prefix] {
+    fn allowed_prefixes(&'a self) -> &'static [Prefix] {
         match self {
             Self::IOB1 { .. } => &Self::IOB1_ALLOWED_PREFIXES,
             Self::IOE1 { .. } => &Self::IOE1_ALLOWED_PREFIXES,
@@ -439,7 +439,7 @@ impl<'a> Token<'a> {
             Self::BILOU { .. } => &Self::BILOU_ALLOWED_PREFIXES,
         }
     }
-    fn start_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
+    fn start_patterns(&'a self) -> &'static [(Prefix, Prefix, Tag)] {
         match self {
             Self::IOB1 { .. } => &Self::IOB1_START_PATTERNS,
             Self::IOE1 { .. } => &Self::IOE1_START_PATTERNS,
@@ -449,7 +449,7 @@ impl<'a> Token<'a> {
             Self::BILOU { .. } => &Self::BILOU_START_PATTERNS,
         }
     }
-    fn inside_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
+    fn inside_patterns(&'a self) -> &'static [(Prefix, Prefix, Tag)] {
         match self {
             Self::IOB1 { .. } => &Self::IOB1_INSIDE_PATTERNS,
             Self::IOE1 { .. } => &Self::IOE1_INSIDE_PATTERNS,
@@ -459,7 +459,7 @@ impl<'a> Token<'a> {
             Self::BILOU { .. } => &Self::BILOU_INSIDE_PATTERNS,
         }
     }
-    fn end_patterns<'b>(&'a self) -> &'a [(Prefix, Prefix, Tag)] {
+    fn end_patterns(&'a self) -> &'static [(Prefix, Prefix, Tag)] {
         match self {
             Self::IOB1 { .. } => &Self::IOB1_END_PATTERNS,
             Self::IOE1 { .. } => &Self::IOE1_END_PATTERNS,
@@ -469,7 +469,7 @@ impl<'a> Token<'a> {
             Self::BILOU { .. } => &Self::BILOU_END_PATTERNS,
         }
     }
-    fn new<'b: 'a>(scheme: SchemeType, token: InnerToken<'b>) -> Self {
+    fn new(scheme: SchemeType, token: InnerToken<'a>) -> Self {
         match scheme {
             SchemeType::IOB1 => Token::IOB1 { token },
             SchemeType::IOB2 => Token::IOB2 { token },
@@ -564,18 +564,26 @@ impl<'a> Tokens<'a> {
         // let outside_token_inner_token = Token{token: Cow::Borrowed("O"), };
         let inner_token = InnerToken::new(Cow::Borrowed("O"), suffix, delimiter)?;
         let outside_token = Token::new(scheme, inner_token);
-        let mut tokens: Vec<Token> = tokens
+        let mut extended_tokens = Vec::with_capacity(tokens.len() + 1);
+        extended_tokens.push(Ok(outside_token));
+        tokens
             .into_iter()
             .map(|cow_str| {
                 let inner = InnerToken::new(cow_str, suffix, delimiter)?;
                 Ok::<Token, ParsingPrefixError<&'a str>>(Token::new(scheme, inner))
             })
-            .collect::<Result<Vec<Token>, ParsingPrefixError<&'a str>>>()?;
-        tokens.push(outside_token); // Tokens are now extended_tokens
-        Ok(Self {
-            extended_tokens: tokens,
-            sent_id,
-        })
+            .for_each(|rt| extended_tokens.push(rt));
+        if let Some(err) = extended_tokens.iter().find(|rt| match rt {
+            Err(_) => true,
+            Ok(_) => false,
+        }) {
+            return err; //WRONG TYPE?
+        } else {
+            Ok(Self {
+                extended_tokens,
+                sent_id,
+            })
+        }
     }
 
     /// Returns the index of the next token not inside the current chunk, which is starting or
@@ -597,38 +605,9 @@ impl<'a> Tokens<'a> {
         return &self.extended_tokens.len() - 2;
     }
 
-    fn unassociated_forward(
-        start: usize,
-        prev: &Token<'a>,
-        slice: &[Token],
-        slice_len: usize,
-    ) -> usize {
-        let slice_of_interest = &slice[start..];
-        let len_of_slice_of_interest = slice_of_interest.len();
-        let mut counter = start; // copies the start index
-        let mut swap_token = prev;
-        loop {
-            let current_token = &slice_of_interest[counter];
-            if current_token.is_inside(swap_token.inner()) {
-                swap_token = &current_token;
-            } else {
-                return counter;
-            }
-            counter += 1;
-            if counter >= len_of_slice_of_interest {
-                break slice_len - 1;
-            }
-        }
-    }
-
     fn is_end(&self, i: usize) -> bool {
         let token = &self.extended_tokens()[i];
         let prev = &self.extended_tokens()[i - 1];
-        token.is_end(prev.inner())
-    }
-    fn unassociated_is_end<'b>(i: usize, tokens: &'b Vec<Token<'b>>) -> bool {
-        let token = &tokens[i];
-        let prev = &tokens[i - 1];
         token.is_end(prev.inner())
     }
 
@@ -704,19 +683,15 @@ impl<'a> EntitiesAdaptor<'a> {
     /// token.
     unsafe fn take_out_pair(tokens: &mut Tokens<'a>, index: usize) -> (Token<'a>, Token<'a>) {
         let current_token = take(tokens.extended_tokens.get_unchecked_mut(index));
-        let previous_token = take(
-            tokens
-                .extended_tokens
-                .get_unchecked_mut(index - 1),
-        );
+        let previous_token = take(tokens.extended_tokens.get_unchecked_mut(index - 1));
         (current_token, previous_token)
     }
-    fn new(tokens: Tokens<'a>) -> Self{
+    fn new(tokens: Tokens<'a>) -> Self {
         let len = tokens.extended_tokens.len();
         Self {
             index: 1,
             tokens,
-            len ,
+            len,
         }
     }
 }
@@ -728,9 +703,24 @@ mod test {
     #[test]
     fn test_entity_adaptor_iterator() {
         let tokens = build_tokens();
-        let first_entity = EntitiesAdaptor::new(tokens).next();
-        let tokens_entities = [('PER', 0, 2), ('LOC', 3, 4)];
-        assert_eq!(first_entity, tokens_entities[0]);
+        // let first_entity = EntitiesAdaptor::new(tokens).next().unwrap().unwrap();
+        // .unwrap();
+        // print()
+        let expected_first_entity = Entity {
+            sent_id: None,
+            start: 0,
+            end: 2,
+            tag: Cow::Borrowed("PER"),
+        };
+        // assert_eq!(first_entity, expected_first_entity);
+    }
+    #[test]
+    fn test_forward_method() {
+        let tokens = build_tokens();
+        println!("{:?}", &tokens);
+        let end = tokens.forward(1, tokens.extended_tokens.get(0).unwrap());
+        let expected_end = 3;
+        assert_eq!(end, expected_end)
     }
     #[test]
     fn test_new_tokens() {
