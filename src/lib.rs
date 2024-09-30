@@ -61,6 +61,21 @@ enum Prefix {
     L,
     ANY,
 }
+impl Prefix {
+    /// This functions verifies that this prefix and the other prefix are the same or one of them
+    /// is the `ANY` prefix.
+    ///
+    /// * `other`: The prefix to compare
+    fn are_the_same_or_any(&self, other: &Prefix) -> bool {
+        let val = (self, other);
+        match val {
+            (Prefix::ANY, _) => true,
+            (_, Prefix::ANY) => true,
+            (s, o) if s == o => true,
+            _ => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ParsingPrefixError<S: AsRef<str>>(S);
@@ -242,8 +257,8 @@ impl<'a> InnerToken<'a> {
         patterns_to_check: &[(Prefix, Prefix, Tag)],
     ) -> bool {
         for (prev_prefix, current_prefix, tag_cond) in patterns_to_check {
-            if prev_prefix == &prev.prefix
-                && current_prefix == &self.prefix
+            if prev_prefix.are_the_same_or_any(&prev.prefix)
+                && current_prefix.are_the_same_or_any(&self.prefix)
                 && self.check_tag(prev, tag_cond)
             {
                 return true;
@@ -659,6 +674,10 @@ impl<'a> Tokens<'a> {
         return &self.extended_tokens.len() - 2;
     }
 
+    /// This method identifies the next tokeken following a chunk that is not a  part of the chunk.
+    /// It returns if the token at index `i` is not part of the previous chunk.
+    ///
+    /// * `i`: Index of the token.
     fn is_end(&self, i: usize) -> bool {
         let token = &self.extended_tokens()[i];
         let prev = &self.extended_tokens()[i - 1];
@@ -783,8 +802,33 @@ mod test {
         // assert_eq!(first_entity, expected_first_entity);
     }
     #[test]
-    fn test_check_pattern() {
-        todo!();
+    fn test_is_start() {
+        let tokens: Tokens = build_tokens();
+        let first_non_outside_token = &tokens.extended_tokens.get(1).unwrap();
+        let second_non_outside_token = &tokens.extended_tokens.get(2).unwrap();
+        assert!(first_non_outside_token.is_start(second_non_outside_token.inner()))
+    }
+    #[test]
+    fn test_tokens_is_end() {
+        let tokens: Tokens = build_tokens();
+        let is_end = tokens.is_end(2);
+        // let first_non_outside_token = &tokens.extended_tokens.get(1).unwrap();
+        // let second_non_outside_token = &tokens.extended_tokens.get(2).unwrap();
+        assert!(!is_end);
+        let is_end = tokens.is_end(3);
+        assert!(is_end)
+    }
+
+    #[test]
+    fn test_innertoken_is_end() {
+        let tokens: Tokens = build_tokens();
+        let first_non_outside_token = tokens.extended_tokens.get(1).unwrap();
+        let second_non_outside_token = tokens.extended_tokens.get(2).unwrap();
+        let third_non_outside_token = tokens.extended_tokens.get(3).unwrap();
+        let is_end = second_non_outside_token.is_end(first_non_outside_token.inner());
+        assert!(!is_end);
+        let is_end = third_non_outside_token.is_end(first_non_outside_token.inner());
+        assert!(is_end)
     }
 
     #[test]
