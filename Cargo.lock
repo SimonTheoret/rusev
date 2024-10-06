@@ -6,8 +6,13 @@ version = 3
 name = "rusev"
 version = "0.1.0"
 dependencies = [
+ "rusev_macro",
  "unicode-segmentation",
 ]
+
+[[package]]
+name = "rusev_macro"
+version = "0.1.0"
 
 [[package]]
 name = "unicode-segmentation"

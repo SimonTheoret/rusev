@@ -20,6 +20,7 @@
 
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt::Display;
 use std::mem::take;
@@ -718,7 +719,7 @@ impl<'a> Iterator for EntitiesIterAdaptor<'a> {
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let ret: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
-        if self.index >= self.len-1 {
+        if self.index >= self.len - 1 {
             return None;
         }
         let mut_tokens = &self.tokens;

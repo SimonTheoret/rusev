@@ -1,0 +1,15 @@
+[package]
+name = "rusev_macro"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[lib]
+path = "./src/macros.rs"
+proc-macro = true
