@@ -59,18 +59,17 @@ enum Prefix {
     S,
     U,
     L,
-    ANY,
+    PrefixAny,
 }
 impl Prefix {
     /// This functions verifies that this prefix and the other prefix are the same or one of them
-    /// is the `ANY` prefix.
+    /// is the `PrefixAny` prefix.
     ///
     /// * `other`: The prefix to compare
-    fn are_the_same_or_any(&self, other: &Prefix) -> bool {
-        let val = (self, other);
-        match val {
-            (Prefix::ANY, _) => true,
-            (_, Prefix::ANY) => true,
+    fn are_the_same_or_contains_any(&self, other: &Prefix) -> bool {
+        match (self, other) {
+            (&Prefix::PrefixAny, _) => true,
+            (_, &Prefix::PrefixAny) => true,
             (s, o) if s == o => true,
             _ => false,
         }
@@ -103,7 +102,7 @@ impl<'a> TryFrom<&'a str> for Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::ANY),
+            "ANY" => Ok(Prefix::PrefixAny),
             _ => Err(ParsingPrefixError(value)),
         }
     }
@@ -128,7 +127,7 @@ impl<'a> Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::ANY),
+            "ANY" => Ok(Prefix::PrefixAny),
             _ => Err(ParsingPrefixError(String::from(value).leak())),
         }
     }
@@ -146,7 +145,7 @@ impl TryFrom<String> for Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::ANY),
+            "ANY" => Ok(Prefix::PrefixAny),
             _ => Err(ParsingPrefixError(value)),
         }
     }
@@ -156,7 +155,7 @@ impl TryFrom<String> for Prefix {
 enum Tag {
     Same,
     Diff,
-    Any,
+    TagAny,
 }
 
 #[derive(Debug, PartialEq, Hash, Clone)]
@@ -241,7 +240,7 @@ impl<'a> InnerToken<'a> {
     #[inline]
     fn check_tag(&self, prev: &InnerToken, cond: &Tag) -> bool {
         match cond {
-            Tag::Any => true,
+            Tag::TagAny => true,
             Tag::Same if prev.tag == self.tag => true,
             Tag::Diff if prev.tag != self.tag => true,
             _ => false,
@@ -257,8 +256,8 @@ impl<'a> InnerToken<'a> {
         patterns_to_check: &[(Prefix, Prefix, Tag)],
     ) -> bool {
         for (prev_prefix, current_prefix, tag_cond) in patterns_to_check {
-            if prev_prefix.are_the_same_or_any(&prev.prefix)
-                && current_prefix.are_the_same_or_any(&self.prefix)
+            if prev_prefix.are_the_same_or_contains_any(&prev.prefix)
+                && current_prefix.are_the_same_or_contains_any(&self.prefix)
                 && self.check_tag(prev, tag_cond)
             {
                 return true;
@@ -344,9 +343,9 @@ impl<'a> Default for Token<'a> {
 impl<'a> Token<'a> {
     const IOB1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
     const IOB1_START_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
-        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::O, Prefix::I, Tag::TagAny),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::B, Prefix::I, Tag::Any),
+        (Prefix::B, Prefix::I, Tag::TagAny),
         (Prefix::I, Prefix::B, Tag::Same),
         (Prefix::B, Prefix::B, Tag::Same),
     ];
@@ -356,17 +355,17 @@ impl<'a> Token<'a> {
     ];
     const IOB1_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::O, Tag::Any),
-        (Prefix::I, Prefix::B, Tag::Any),
-        (Prefix::B, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::O, Tag::TagAny),
+        (Prefix::I, Prefix::B, Tag::TagAny),
+        (Prefix::B, Prefix::O, Tag::TagAny),
         (Prefix::B, Prefix::I, Tag::Diff),
         (Prefix::B, Prefix::B, Tag::Same),
     ];
     const IOE1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE1_START_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
-        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::O, Prefix::I, Tag::TagAny),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::E, Prefix::I, Tag::Any),
+        (Prefix::E, Prefix::I, Tag::TagAny),
         (Prefix::E, Prefix::E, Tag::Same),
     ];
     const IOE1_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
@@ -375,33 +374,33 @@ impl<'a> Token<'a> {
     ];
     const IOE1_END_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::O, Tag::TagAny),
         (Prefix::I, Prefix::E, Tag::Diff),
         (Prefix::E, Prefix::I, Tag::Same),
         (Prefix::E, Prefix::E, Tag::Same),
     ];
 
     const IOB2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
-    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::ANY, Prefix::B, Tag::Any)];
+    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] =
+        [(Prefix::PrefixAny, Prefix::B, Tag::TagAny)];
     const IOB2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
         (Prefix::B, Prefix::I, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
     ];
     const IOB2_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::O, Tag::TagAny),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::B, Tag::Any),
-        (Prefix::B, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::B, Tag::TagAny),
+        (Prefix::B, Prefix::O, Tag::TagAny),
         (Prefix::B, Prefix::I, Tag::Diff),
-        (Prefix::B, Prefix::B, Tag::Any),
+        (Prefix::B, Prefix::B, Tag::TagAny),
     ];
-
     const IOE2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE2_START_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::O, Prefix::I, Tag::Any),
-        (Prefix::O, Prefix::E, Tag::Any),
-        (Prefix::E, Prefix::I, Tag::Any),
-        (Prefix::E, Prefix::E, Tag::Any),
+        (Prefix::O, Prefix::I, Tag::TagAny),
+        (Prefix::O, Prefix::E, Tag::TagAny),
+        (Prefix::E, Prefix::I, Tag::TagAny),
+        (Prefix::E, Prefix::E, Tag::TagAny),
         (Prefix::I, Prefix::I, Tag::Diff),
         (Prefix::I, Prefix::E, Tag::Diff),
     ];
@@ -409,7 +408,8 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
     ];
-    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::ANY, Tag::Any)];
+    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] =
+        [(Prefix::E, Prefix::PrefixAny, Tag::TagAny)];
 
     const IOBES_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::E, Prefix::B, Prefix::S];
@@ -420,19 +420,19 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOBES_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::ANY, Tag::Any),
-        (Prefix::E, Prefix::ANY, Tag::Any),
+        (Prefix::S, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::E, Prefix::PrefixAny, Tag::TagAny),
     ];
     const IOBES_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::ANY, Tag::Any),
-        (Prefix::E, Prefix::ANY, Tag::Any),
+        (Prefix::S, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::E, Prefix::PrefixAny, Tag::TagAny),
     ];
 
     const BILOU_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::U, Prefix::B, Prefix::O];
     const BILOU_START_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::ANY, Prefix::B, Tag::Any),
-        (Prefix::ANY, Prefix::U, Tag::Any),
+        (Prefix::PrefixAny, Prefix::B, Tag::TagAny),
+        (Prefix::PrefixAny, Prefix::U, Tag::TagAny),
     ];
     const BILOU_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
         (Prefix::B, Prefix::I, Tag::Same),
@@ -441,8 +441,8 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::L, Tag::Same),
     ];
     const BILOU_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::U, Prefix::ANY, Tag::Any),
-        (Prefix::L, Prefix::ANY, Tag::Any),
+        (Prefix::U, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::L, Prefix::PrefixAny, Tag::TagAny),
     ];
     fn allowed_prefixes(&'a self) -> &'static [Prefix] {
         match self {
@@ -520,6 +520,7 @@ impl<'a> Token<'a> {
         self.allowed_prefixes().contains(&self.inner().prefix)
     }
 
+    /// Check whether the current token is the start of chunk.
     fn is_start(&self, prev: &InnerToken) -> bool {
         match self {
             Self::IOB1 { token } => token.check_patterns(prev, self.start_patterns()),
@@ -530,6 +531,7 @@ impl<'a> Token<'a> {
             Self::BILOU { token } => token.check_patterns(prev, self.start_patterns()),
         }
     }
+    /// Check whether the current token is the inside of chunk.
     fn is_inside(&self, prev: &InnerToken) -> bool {
         match self {
             Self::IOB1 { token } => token.check_patterns(prev, self.inside_patterns()),
@@ -540,6 +542,7 @@ impl<'a> Token<'a> {
             Self::BILOU { token } => token.check_patterns(prev, self.inside_patterns()),
         }
     }
+    /// Check whether the *previous* token is the end of chunk.
     fn is_end(&self, prev: &InnerToken) -> bool {
         match self {
             Self::IOB1 { token } => token.check_patterns(prev, self.end_patterns()),
@@ -571,13 +574,8 @@ struct ExtendedTokensIterator<'a> {
     suffix: bool,
     delimiter: char,
     index: usize,
-    /// Total length to iterate over. This length is equal to outside_token.len()
+    /// Total length to iterate over. This length is equal to token.len()
     total_len: usize,
-}
-impl<'a> ExtendedTokensIterator<'a> {
-    /// The `PARTIAL_OFFSET` constant is the offset used during the iteration of the tokens
-    /// attribute. This is due to the use of the outside_token.
-    const PARTIAL_OFFSET: usize = 1;
 }
 impl<'a> Iterator for ExtendedTokensIterator<'a> {
     type Item = Result<Token<'a>, ParsingPrefixError<&'a str>>;
@@ -585,15 +583,10 @@ impl<'a> Iterator for ExtendedTokensIterator<'a> {
         let ret: Option<Result<Token, ParsingPrefixError<&'a str>>>;
         if self.index > self.total_len {
             ret = None;
-        } else if self.index == 0 {
+        } else if self.index == self.total_len {
             ret = Some(Ok(take(&mut self.outside_token)));
         } else {
-            let cow_str = unsafe {
-                take(
-                    self.tokens
-                        .get_unchecked_mut(self.index - Self::PARTIAL_OFFSET),
-                )
-            };
+            let cow_str = unsafe { take(self.tokens.get_unchecked_mut(self.index)) };
             let inner_token = InnerToken::new(cow_str, self.suffix, self.delimiter);
             ret = match inner_token {
                 Err(msg) => Some(Err(msg)),
@@ -611,7 +604,6 @@ impl<'a> ExtendedTokensIterator<'a> {
         scheme: SchemeType,
         suffix: bool,
         delimiter: char,
-        sent_id: Option<usize>,
     ) -> Self {
         let total_len = tokens.len();
         Self {
@@ -641,10 +633,10 @@ impl<'a> Tokens<'a> {
     ) -> Result<Self, ParsingPrefixError<&'a str>> {
         // let inner_token_prefix =
         // let outside_token_inner_token = Token{token: Cow::Borrowed("O"), };
-        let inner_token = InnerToken::new(Cow::Borrowed("O"), suffix, delimiter)?;
-        let outside_token = Token::new(scheme, inner_token);
+        let outside_token_inner = InnerToken::new(Cow::Borrowed("O"), suffix, delimiter)?;
+        let outside_token = Token::new(scheme, outside_token_inner);
         let tokens_iter =
-            ExtendedTokensIterator::new(outside_token, tokens, scheme, suffix, delimiter, sent_id);
+            ExtendedTokensIterator::new(outside_token, tokens, scheme, suffix, delimiter);
         let extended_tokens: Result<Vec<Token>, ParsingPrefixError<&str>> = tokens_iter.collect();
         match extended_tokens {
             Err(prefix_error) => Err(prefix_error),
@@ -655,27 +647,28 @@ impl<'a> Tokens<'a> {
         }
     }
 
-    /// Returns the index of the last token inside the current chunk when given a `start` index and
+    /// Returns the index + 1 of the last token inside the current chunk when given a `start` index and
     /// the previous token.
     ///
     /// * `start`: Indexing at which we are starting to look for a token not inside.
     /// * `prev`: Previous token. This token is necessary to know if the token at index `start` is
-    /// inside or not.
+    ///    inside or not.
     fn forward(&self, start: usize, prev: &Token<'a>) -> usize {
         let slice_of_interest = &self.extended_tokens()[start..];
         let mut swap_token = prev;
         for (i, current_token) in slice_of_interest.iter().enumerate() {
             if current_token.is_inside(swap_token.inner()) {
-                swap_token = &current_token;
+                swap_token = current_token;
             } else {
                 return i + start;
             }
         }
-        return &self.extended_tokens.len() - 2;
+        &self.extended_tokens.len() - 2
     }
 
-    /// This method identifies the next tokeken following a chunk that is not a  part of the chunk.
-    /// It returns if the token at index `i` is not part of the previous chunk.
+    /// This method returns a bool if the token at index `i` is *NOT*
+    /// part of the same chunk as token at `i-1` or is not part of a
+    /// chunk at all. Else, it returns false
     ///
     /// * `i`: Index of the token.
     fn is_end(&self, i: usize) -> bool {
@@ -703,66 +696,103 @@ struct EntitiesAdaptor<'a> {
     // current: &'a mut Token<'a>,
     // prev: &'a mut Token<'a>,
 }
+
+// i = 0
+// entities = []
+// prev = self.outside_token
+// while i < len(self.extended_tokens):
+//     token = self.extended_tokens[i]
+//     token.is_valid()
+//     if token.is_start(prev):
+//         end = self._forward(start=i + 1, prev=token)
+//         if self._is_end(end):
+//             entity = Entity(sent_id=self.sent_id, start=i, end=end, tag=token.tag)
+//             entities.append(entity)
+//         i = end
+//     else:
+//         i += 1
+//     prev = self.extended_tokens[i - 1]
+// return entities
 impl<'a> Iterator for EntitiesAdaptor<'a> {
     type Item = Option<Result<Entity<'a>, Box<dyn Error>>>;
     fn next(&mut self) -> Option<Self::Item> {
+        let ret: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
         if self.index >= self.len {
             return None;
         }
-        let mut_tokens: &mut Tokens = &mut self.tokens;
-        let (current_pre_ref_cell, prev) = unsafe { Self::take_out_pair(mut_tokens, self.index) };
+        let mut_tokens: RefCell<Tokens> = RefCell::new(self.tokens);
+        let (current_pre_ref_cell, prev) =
+            unsafe { Self::take_out_pair(&mut mut_tokens.borrow_mut(), self.index) }; //BUG: CANNOT TAKE PREV. keep prev in self or move it back after usage
         let current = RefCell::new(current_pre_ref_cell);
         let borrowed_current = current.borrow();
         let is_valid = borrowed_current.is_valid();
+        dbg!(self.index);
+        dbg!(current.clone());
+        dbg!(prev.clone());
         if !is_valid {
-            Some(Some(Err(Box::new(InvalidToken(
+            ret = Some(Some(Err(Box::new(InvalidToken(
                 borrowed_current.inner().token.to_string(),
             )))))
-        } else {
-            if borrowed_current.is_start(prev.inner()) {
-                let end = mut_tokens.forward(self.index, &prev);
-                if mut_tokens.is_end(end) {
-                    drop(borrowed_current);
-                    let tag = current.into_inner().take_tag();
-                    let entity = Entity {
-                        sent_id: mut_tokens.sent_id,
-                        start: self.index,
-                        end,
-                        tag,
-                    };
-                    self.index = end;
-                    return Some(Some(Ok(entity)));
-                } else {
-                    self.index += 1;
-                    return Some(None);
-                }
+        } else if borrowed_current.is_start(prev.inner()) {
+            let end = mut_tokens
+                .borrow()
+                .forward(self.index + 1, &borrowed_current);
+            if mut_tokens.borrow().is_end(end) {
+                drop(borrowed_current);
+                let tag = current.into_inner().take_tag();
+                let entity = Entity {
+                    sent_id: mut_tokens.borrow().sent_id,
+                    start: self.index,
+                    end,
+                    tag,
+                };
+                self.index = end;
+                ret = Some(Some(Ok(entity)));
             } else {
-                self.index += 1;
-                Some(None)
+                self.index = end;
+                ret = Some(None);
             }
-        }
+        } else {
+            self.index += 1;
+            ret = Some(None);
+        };
+        ret
     }
 }
-impl<'a> EntitiesAdaptor<'a> {
-    /// Takes out the current and previous tokens (in that order) when given an index. The index
-    /// must be >= 1 and < tokens.len() or this function will result in UB. Calling this function
-    /// with an already use index will result in default tokens.
+impl<'a, 'b> EntitiesAdaptor<'a>
+where 'a: 'b {
+    /// Takes out the current and previous tokens (in that order) when
+    /// given an index. The index must be >= 0 and < tokens.len() or
+    /// this function will result in UB. Calling this function with an
+    /// already used index will result in default tokens. This
+    /// functions behaves differently, depending on the value of the
+    /// index. If index is 0, the previous token is the outside token
+    /// of the extended tokens. Else, it takes the tokens at index `i`
+    /// and `i-1`.
     ///
-    /// SAFETY: The index must be >= 1 and < tokens.len(), or this function will result in UB.
+    /// SAFETY: The index must be >= 0 and < tokens.len(), or this
+    /// function will result in UB.
     ///
-    /// * `tokens`: RefCell wrapping the tokens. The current and previous tokens are extracted from
-    /// its extended_tokens field.
-    /// * `index`: Index specifying the current token. `index-1` is used to take the previous
-    /// token.
-    unsafe fn take_out_pair(tokens: &mut Tokens<'a>, index: usize) -> (Token<'a>, Token<'a>) {
-        let current_token = take(tokens.extended_tokens.get_unchecked_mut(index));
-        let previous_token = take(tokens.extended_tokens.get_unchecked_mut(index - 1));
-        (current_token, previous_token)
+    /// * `tokens`: The tokens. The current and previous tokens are
+    ///    extracted from its extended_tokens field.
+    /// * `index`: Index specifying the current token. `index-1` is
+    ///    used to take the previous token if index!=1.
+    unsafe fn take_out_pair(tokens: &'b mut Tokens<'a>, index: usize) -> (Token<'a>, &'b Token<'a>) {
+        if index == 0 {
+            let index_of_outside_token = tokens.extended_tokens.len() - 1;
+            let current_token = take(tokens.extended_tokens.get_unchecked_mut(0));
+            let previous_token = tokens.extended_tokens.get_unchecked(index_of_outside_token);
+            (current_token, previous_token)
+        } else {
+            let current_token = take(tokens.extended_tokens.get_unchecked_mut(index));
+            let previous_token = tokens.extended_tokens.get_unchecked(index - 1);
+            (current_token, previous_token)
+        }
     }
     fn new(tokens: Tokens<'a>) -> Self {
         let len = tokens.extended_tokens.len();
         Self {
-            index: 1,
+            index: 0,
             tokens,
             len,
         }
@@ -776,55 +806,52 @@ mod test {
     #[test]
     fn test_entity_adaptor_iterator() {
         let tokens = build_tokens();
-        println!("{:?}", tokens);
+        println!("tokens: {:?}", tokens);
         let mut iter = EntitiesAdaptor::new(tokens.clone());
         let first_entity = iter.next().unwrap();
-        println!("{:?}", first_entity);
-        assert!(first_entity.is_none());
-        let second_entity = iter.next().unwrap().unwrap(); /* .unwrap();  */
-        println!("{:?}", second_entity);
-        // assert_eq!(
-        //     second_entity,
-        //     Entity {
-        //         sent_id: None,
-        //         start: 1,
-        //         end: 2,
-        //         tag: Cow::Borrowed("PER")
-        //     }
-        // )
-
-        // let expected_first_entity = Entity {
-        //     sent_id: None,
-        //     start: 0,
-        //     end: 2,
-        //     tag: Cow::Borrowed("PER"),
-        // };
-        // assert_eq!(first_entity, expected_first_entity);
+        println!("first entity: {:?}", first_entity);
+        assert!(first_entity.is_some());
+        let second_entity = iter.next().unwrap();
+        println!("second entity: {:?}", second_entity);
+        assert!(second_entity.is_none());
+        let third_entity = iter.next().unwrap();
+        println!("third entity: {:?}", third_entity);
+        assert!(third_entity.is_none());
+        let forth_entity = iter.next().unwrap();
+        println!("forth entity: {:?}", forth_entity);
+        assert!(forth_entity.is_some()); //NOTE: I don't understand why it works
+        let fifth_entity = iter.next();
+        println!("fifth entity: {:?}", fifth_entity);
+        assert!(fifth_entity.is_none());
     }
     #[test]
     fn test_is_start() {
         let tokens: Tokens = build_tokens();
-        let first_non_outside_token = &tokens.extended_tokens.get(1).unwrap();
-        let second_non_outside_token = &tokens.extended_tokens.get(2).unwrap();
-        assert!(first_non_outside_token.is_start(second_non_outside_token.inner()))
+        dbg!(tokens.clone());
+        let first_token = tokens.extended_tokens.first().unwrap();
+        let second_token = tokens.extended_tokens.get(1).unwrap();
+        assert!(first_token.is_start(second_token.inner()));
+        let outside_token = tokens.extended_tokens.last().unwrap();
+        assert!(first_token.is_start(outside_token.inner()));
     }
     #[test]
     fn test_tokens_is_end() {
         let tokens: Tokens = build_tokens();
-        let is_end = tokens.is_end(2);
+        let is_end_of_chunk = tokens.is_end(2);
+        dbg!(tokens.clone());
         // let first_non_outside_token = &tokens.extended_tokens.get(1).unwrap();
         // let second_non_outside_token = &tokens.extended_tokens.get(2).unwrap();
-        assert!(!is_end);
-        let is_end = tokens.is_end(3);
-        assert!(is_end)
+        assert!(is_end_of_chunk);
+        let is_end_of_chunk = tokens.is_end(3);
+        assert!(!is_end_of_chunk)
     }
 
     #[test]
     fn test_innertoken_is_end() {
         let tokens: Tokens = build_tokens();
-        let first_non_outside_token = tokens.extended_tokens.get(1).unwrap();
-        let second_non_outside_token = tokens.extended_tokens.get(2).unwrap();
-        let third_non_outside_token = tokens.extended_tokens.get(3).unwrap();
+        let first_non_outside_token = tokens.extended_tokens.first().unwrap();
+        let second_non_outside_token = tokens.extended_tokens.get(1).unwrap();
+        let third_non_outside_token = tokens.extended_tokens.get(2).unwrap();
         let is_end = second_non_outside_token.is_end(first_non_outside_token.inner());
         assert!(!is_end);
         let is_end = third_non_outside_token.is_end(first_non_outside_token.inner());
@@ -836,20 +863,20 @@ mod test {
         let tokens = build_tokens();
         println!("{:?}", tokens);
         println!("{:?}", tokens.extended_tokens());
-        let prev = tokens.extended_tokens().get(0).unwrap();
+        let prev = tokens.extended_tokens().first().unwrap();
         let is_start = tokens
             .extended_tokens()
             .get(1)
             .unwrap()
-            .is_start(&prev.inner());
-        assert!(is_start)
+            .is_start(prev.inner());
+        assert!(!is_start)
     }
     #[test]
     fn test_forward_method() {
         let tokens = build_tokens();
         println!("{:?}", &tokens);
-        let end = tokens.forward(1, tokens.extended_tokens.get(0).unwrap());
-        let expected_end = 1;
+        let end = tokens.forward(1, tokens.extended_tokens.first().unwrap());
+        let expected_end = 2;
         assert_eq!(end, expected_end)
     }
     #[test]
