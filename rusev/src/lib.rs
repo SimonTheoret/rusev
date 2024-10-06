@@ -689,9 +689,9 @@ impl<'a> Tokens<'a> {
 /// * `current`: Current token
 /// * `prev`:  Previous token
 /// * `prev_prev`: Previous token of the previous token
-struct EntitiesAdaptor<'a> {
+struct EntitiesIterAdaptor<'a> {
     index: usize,
-    tokens: Tokens<'a>,
+    tokens: RefCell<Tokens<'a>>,
     len: usize,
     // current: &'a mut Token<'a>,
     // prev: &'a mut Token<'a>,
@@ -713,27 +713,27 @@ struct EntitiesAdaptor<'a> {
 //         i += 1
 //     prev = self.extended_tokens[i - 1]
 // return entities
-impl<'a> Iterator for EntitiesAdaptor<'a> {
+impl<'a> Iterator for EntitiesIterAdaptor<'a> {
     type Item = Option<Result<Entity<'a>, Box<dyn Error>>>;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         let ret: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
-        if self.index >= self.len {
+        if self.index >= self.len-1 {
             return None;
         }
-        let mut_tokens: RefCell<Tokens> = RefCell::new(self.tokens);
+        let mut_tokens = &self.tokens;
+        let mut mut_tokens_ref = mut_tokens.borrow_mut();
         let (current_pre_ref_cell, prev) =
-            unsafe { Self::take_out_pair(&mut mut_tokens.borrow_mut(), self.index) }; //BUG: CANNOT TAKE PREV. keep prev in self or move it back after usage
+            unsafe { Self::take_out_pair(&mut mut_tokens_ref, self.index) };
         let current = RefCell::new(current_pre_ref_cell);
         let borrowed_current = current.borrow();
         let is_valid = borrowed_current.is_valid();
-        dbg!(self.index);
-        dbg!(current.clone());
-        dbg!(prev.clone());
         if !is_valid {
             ret = Some(Some(Err(Box::new(InvalidToken(
                 borrowed_current.inner().token.to_string(),
             )))))
         } else if borrowed_current.is_start(prev.inner()) {
+            drop(mut_tokens_ref);
             let end = mut_tokens
                 .borrow()
                 .forward(self.index + 1, &borrowed_current);
@@ -759,8 +759,10 @@ impl<'a> Iterator for EntitiesAdaptor<'a> {
         ret
     }
 }
-impl<'a, 'b> EntitiesAdaptor<'a>
-where 'a: 'b {
+impl<'a, 'b> EntitiesIterAdaptor<'a>
+where
+    'a: 'b,
+{
     /// Takes out the current and previous tokens (in that order) when
     /// given an index. The index must be >= 0 and < tokens.len() or
     /// this function will result in UB. Calling this function with an
@@ -777,7 +779,10 @@ where 'a: 'b {
     ///    extracted from its extended_tokens field.
     /// * `index`: Index specifying the current token. `index-1` is
     ///    used to take the previous token if index!=1.
-    unsafe fn take_out_pair(tokens: &'b mut Tokens<'a>, index: usize) -> (Token<'a>, &'b Token<'a>) {
+    unsafe fn take_out_pair(
+        tokens: &'b mut Tokens<'a>,
+        index: usize,
+    ) -> (Token<'a>, &'b Token<'a>) {
         if index == 0 {
             let index_of_outside_token = tokens.extended_tokens.len() - 1;
             let current_token = take(tokens.extended_tokens.get_unchecked_mut(0));
@@ -793,9 +798,34 @@ where 'a: 'b {
         let len = tokens.extended_tokens.len();
         Self {
             index: 0,
-            tokens,
+            tokens: RefCell::new(tokens),
             len,
         }
+    }
+}
+
+struct EntitiesIter<'a>(EntitiesIterAdaptor<'a>);
+
+impl<'a> Iterator for EntitiesIter<'a> {
+    type Item = Result<Entity<'a>, Box<dyn Error>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>> = self.0.next();
+        // Remove the Some(None) cases
+        while matches!(&res, Some(None)) {
+            res = self.0.next();
+        }
+        // Could be None or Some(Some(..))
+        match res {
+            Some(Some(result_value)) => Some(result_value),
+            None => None,
+            Some(None) => unreachable!(),
+        }
+        // loop{
+        //     match self.0.next(){
+        //         Some(Some(resu)) => {res = },
+        //         Some(None) =>
+        //     }
+        // }
     }
 }
 
@@ -803,11 +833,36 @@ where 'a: 'b {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_entity_iter() {
+        let tokens = build_tokens();
+        println!("tokens: {:?}", tokens);
+        let iter = EntitiesIter(EntitiesIterAdaptor::new(tokens.clone()));
+        let wrapped_entities: Result<Vec<_>, Box<dyn Error>> = iter.collect();
+        let entities = wrapped_entities.unwrap();
+        let expected_entities = vec![
+            Entity {
+                sent_id: None,
+                start: 0,
+                end: 2,
+                tag: Cow::Borrowed("PER"),
+            },
+            Entity {
+                sent_id: None,
+                start: 3,
+                end: 4,
+                tag: Cow::Borrowed("LOC"),
+            },
+        ];
+        assert_eq!(expected_entities, entities)
+    }
+
     #[test]
     fn test_entity_adaptor_iterator() {
         let tokens = build_tokens();
         println!("tokens: {:?}", tokens);
-        let mut iter = EntitiesAdaptor::new(tokens.clone());
+        let mut iter = EntitiesIterAdaptor::new(tokens.clone());
         let first_entity = iter.next().unwrap();
         println!("first entity: {:?}", first_entity);
         assert!(first_entity.is_some());
@@ -816,13 +871,12 @@ mod test {
         assert!(second_entity.is_none());
         let third_entity = iter.next().unwrap();
         println!("third entity: {:?}", third_entity);
-        assert!(third_entity.is_none());
-        let forth_entity = iter.next().unwrap();
-        println!("forth entity: {:?}", forth_entity);
-        assert!(forth_entity.is_some()); //NOTE: I don't understand why it works
-        let fifth_entity = iter.next();
-        println!("fifth entity: {:?}", fifth_entity);
-        assert!(fifth_entity.is_none());
+        assert!(third_entity.is_some());
+        // let forth_entity = iter.next().unwrap();
+        // println!("forth entity: {:?}", forth_entity);
+        // assert!(forth_entity.is_none());
+        let iteration_has_ended = iter.next().is_none();
+        assert!(iteration_has_ended);
     }
     #[test]
     fn test_is_start() {
