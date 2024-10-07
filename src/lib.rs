@@ -1,34 +1,38 @@
 //! This library is  a re-implementation of the SeqEval library. SeqEval is built with python and
-//! is too slow when handling a large amount of strings. This library hopes to fulfill the same
+//! can be slow when handling a large amount of strings. This library hopes to fulfill the same
 //! niche, but hopefully in a much more performant way.
 //! # SCHEMES
 //! The current schemes are supported:
-//! - IOB1: Here, I is a token inside a chunk, O is a token outside a chunk and B is the beginning
-//! of chunk immediately following another chunk of the same Named Entity.
-//! - IOB2: It is same as IOB1, except that a B tag is given for every token, which exists at the
-//! beginning of the chunk.
-//! - IOE1: An E tag used to mark the last token of a chunk immediately preceding another chunk of
-//! the same named entity.
-//! - IOE2: It is same as IOE1, except that an E tag is given for every token, which exists at the
-//! end of the chunk.
-//! - BILOU/IOBES: 'E' and 'L' denotes Last or Ending character in a sequence and 'S' denotes a single
-//! element  and 'U' a unit element.
+//! * IOB1: Here, I is a token inside a chunk, O is a token outside a chunk and B is the beginning
+//!   of chunk immediately following another chunk of the same Named Entity.
+//! * IOB2: It is same as IOB1, except that a B tag is given for every token, which exists at the
+//!   beginning of the chunk.
+//! * IOE1: An E tag used to mark the last token of a chunk immediately preceding another chunk of
+//!   the same named entity.
+//! * IOE2: It is same as IOE1, except that an E tag is given for every token, which exists at the
+//!   end of the chunk.
+//! * BILOU/IOBES: 'E' and 'L' denotes Last or Ending character in a sequence and 'S' denotes a single
+//!   element  and 'U' a unit element.
 //! # NOTE ON B-TAG
 //! The B-prefix before a tag indicates that the tag is the beginning of a chunk that immediately
 //! follows another chunk of the same type without O tags between them. It is used only in that
 //! case: when a chunk comes after an O tag, the first token of the chunk takes the I- prefix.
 
-use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::str::FromStr;
+use std::{borrow::Cow, cell::RefCell};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod metrics;
+
+/// An entity represent a named objet in named entity recognition (NER).
 #[derive(Debug, Hash, PartialEq, Clone)]
-struct Entity<'a> {
+pub struct Entity<'a> {
     sent_id: Option<usize>,
     start: usize,
     end: usize,
@@ -46,7 +50,7 @@ impl<'a> Display for Entity<'a> {
 }
 
 impl<'a> Entity<'a> {
-    fn as_tuple(&'a self) -> (Option<usize>, usize, usize, &'a str) {
+    pub fn as_tuple(&'a self) -> (Option<usize>, usize, usize, &'a str) {
         (self.sent_id, self.start, self.end, self.tag.as_ref())
     }
 }
@@ -60,7 +64,7 @@ enum Prefix {
     S,
     U,
     L,
-    PrefixAny,
+    Any,
 }
 impl Prefix {
     /// This functions verifies that this prefix and the other prefix are the same or one of them
@@ -69,8 +73,8 @@ impl Prefix {
     /// * `other`: The prefix to compare
     fn are_the_same_or_contains_any(&self, other: &Prefix) -> bool {
         match (self, other) {
-            (&Prefix::PrefixAny, _) => true,
-            (_, &Prefix::PrefixAny) => true,
+            (&Prefix::Any, _) => true,
+            (_, &Prefix::Any) => true,
             (s, o) if s == o => true,
             _ => false,
         }
@@ -78,9 +82,9 @@ impl Prefix {
 }
 
 #[derive(Debug, Clone)]
-struct ParsingPrefixError<S: AsRef<str>>(S);
+pub struct ParsingPrefixError<S: AsRef<str>>(S);
 
-impl<S: AsRef<str> + Error> Display for ParsingPrefixError<S> {
+impl<S: AsRef<str>> Display for ParsingPrefixError<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let content = self.0.as_ref();
         write!(
@@ -103,7 +107,7 @@ impl<'a> TryFrom<&'a str> for Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::PrefixAny),
+            "ANY" => Ok(Prefix::Any),
             _ => Err(ParsingPrefixError(value)),
         }
     }
@@ -128,7 +132,7 @@ impl<'a> Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::PrefixAny),
+            "ANY" => Ok(Prefix::Any),
             _ => Err(ParsingPrefixError(String::from(value).leak())),
         }
     }
@@ -146,7 +150,7 @@ impl TryFrom<String> for Prefix {
             "S" => Ok(Prefix::S),
             "U" => Ok(Prefix::U),
             "L" => Ok(Prefix::L),
-            "ANY" => Ok(Prefix::PrefixAny),
+            "ANY" => Ok(Prefix::Any),
             _ => Err(ParsingPrefixError(value)),
         }
     }
@@ -156,7 +160,7 @@ impl TryFrom<String> for Prefix {
 enum Tag {
     Same,
     Diff,
-    TagAny,
+    Any,
 }
 
 #[derive(Debug, PartialEq, Hash, Clone)]
@@ -206,7 +210,7 @@ impl<'a> InnerToken<'a> {
     ///
     /// * `token`: str or String to parse the InnerToken from
     /// * `suffix`: Marker indicating if prefix is located at the end (when suffix is true) or the
-    /// end (when suffix is false) of the token
+    ///    end (when suffix is false) of the token
     /// * `delimiter`: Indicates the char used to separate the Prefix from the rest of the tag
     fn new(
         token: Cow<'a, str>,
@@ -228,20 +232,10 @@ impl<'a> InnerToken<'a> {
         Ok(Self { token, prefix, tag })
     }
 
-    /// Check whether the prefix is allowed or not
-    fn get_token_ref(&'a self) -> &'a str {
-        &self.token
-    }
-    fn get_token_owned(&'a self) -> String {
-        match &self.token {
-            Cow::Owned(owned_string) => owned_string.clone(),
-            Cow::Borrowed(borrowed_string) => borrowed_string.to_string(),
-        }
-    }
     #[inline]
     fn check_tag(&self, prev: &InnerToken, cond: &Tag) -> bool {
         match cond {
-            Tag::TagAny => true,
+            Tag::Any => true,
             Tag::Same if prev.tag == self.tag => true,
             Tag::Diff if prev.tag != self.tag => true,
             _ => false,
@@ -289,15 +283,9 @@ impl<'a> InnerToken<'a> {
 //
 // impl Error for InvalidTokenError {}
 //
-#[derive(Debug, Clone, Copy)]
-enum Pattern {
-    Start,
-    Inside,
-    End,
-}
 
 #[derive(Debug, Clone, Copy)]
-enum SchemeType {
+pub enum SchemeType {
     IOB1,
     IOE1,
     IOB2,
@@ -307,7 +295,7 @@ enum SchemeType {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct InvalidToken(String);
+pub struct InvalidToken(String);
 
 impl Display for InvalidToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -317,6 +305,7 @@ impl Display for InvalidToken {
 
 impl Error for InvalidToken {}
 
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, PartialEq)]
 enum Token<'a> {
     IOB1 { token: InnerToken<'a> },
@@ -344,9 +333,9 @@ impl<'a> Default for Token<'a> {
 impl<'a> Token<'a> {
     const IOB1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
     const IOB1_START_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
-        (Prefix::O, Prefix::I, Tag::TagAny),
+        (Prefix::O, Prefix::I, Tag::Any),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::B, Prefix::I, Tag::TagAny),
+        (Prefix::B, Prefix::I, Tag::Any),
         (Prefix::I, Prefix::B, Tag::Same),
         (Prefix::B, Prefix::B, Tag::Same),
     ];
@@ -356,17 +345,17 @@ impl<'a> Token<'a> {
     ];
     const IOB1_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::O, Tag::TagAny),
-        (Prefix::I, Prefix::B, Tag::TagAny),
-        (Prefix::B, Prefix::O, Tag::TagAny),
+        (Prefix::I, Prefix::O, Tag::Any),
+        (Prefix::I, Prefix::B, Tag::Any),
+        (Prefix::B, Prefix::O, Tag::Any),
         (Prefix::B, Prefix::I, Tag::Diff),
         (Prefix::B, Prefix::B, Tag::Same),
     ];
     const IOE1_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE1_START_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
-        (Prefix::O, Prefix::I, Tag::TagAny),
+        (Prefix::O, Prefix::I, Tag::Any),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::E, Prefix::I, Tag::TagAny),
+        (Prefix::E, Prefix::I, Tag::Any),
         (Prefix::E, Prefix::E, Tag::Same),
     ];
     const IOE1_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
@@ -375,33 +364,32 @@ impl<'a> Token<'a> {
     ];
     const IOE1_END_PATTERNS: [(Prefix, Prefix, Tag); 5] = [
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::O, Tag::TagAny),
+        (Prefix::I, Prefix::O, Tag::Any),
         (Prefix::I, Prefix::E, Tag::Diff),
         (Prefix::E, Prefix::I, Tag::Same),
         (Prefix::E, Prefix::E, Tag::Same),
     ];
 
     const IOB2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::B];
-    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] =
-        [(Prefix::PrefixAny, Prefix::B, Tag::TagAny)];
+    const IOB2_START_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::Any, Prefix::B, Tag::Any)];
     const IOB2_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
         (Prefix::B, Prefix::I, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
     ];
     const IOB2_END_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::I, Prefix::O, Tag::TagAny),
+        (Prefix::I, Prefix::O, Tag::Any),
         (Prefix::I, Prefix::I, Tag::Diff),
-        (Prefix::I, Prefix::B, Tag::TagAny),
-        (Prefix::B, Prefix::O, Tag::TagAny),
+        (Prefix::I, Prefix::B, Tag::Any),
+        (Prefix::B, Prefix::O, Tag::Any),
         (Prefix::B, Prefix::I, Tag::Diff),
-        (Prefix::B, Prefix::B, Tag::TagAny),
+        (Prefix::B, Prefix::B, Tag::Any),
     ];
     const IOE2_ALLOWED_PREFIXES: [Prefix; 3] = [Prefix::I, Prefix::O, Prefix::E];
     const IOE2_START_PATTERNS: [(Prefix, Prefix, Tag); 6] = [
-        (Prefix::O, Prefix::I, Tag::TagAny),
-        (Prefix::O, Prefix::E, Tag::TagAny),
-        (Prefix::E, Prefix::I, Tag::TagAny),
-        (Prefix::E, Prefix::E, Tag::TagAny),
+        (Prefix::O, Prefix::I, Tag::Any),
+        (Prefix::O, Prefix::E, Tag::Any),
+        (Prefix::E, Prefix::I, Tag::Any),
+        (Prefix::E, Prefix::E, Tag::Any),
         (Prefix::I, Prefix::I, Tag::Diff),
         (Prefix::I, Prefix::E, Tag::Diff),
     ];
@@ -409,8 +397,7 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
         (Prefix::I, Prefix::I, Tag::Same),
     ];
-    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] =
-        [(Prefix::E, Prefix::PrefixAny, Tag::TagAny)];
+    const IOE2_END_PATTERNS: [(Prefix, Prefix, Tag); 1] = [(Prefix::E, Prefix::Any, Tag::Any)];
 
     const IOBES_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::E, Prefix::B, Prefix::S];
@@ -421,19 +408,19 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::E, Tag::Same),
     ];
     const IOBES_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::PrefixAny, Tag::TagAny),
-        (Prefix::E, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::S, Prefix::Any, Tag::Any),
+        (Prefix::E, Prefix::Any, Tag::Any),
     ];
     const IOBES_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::S, Prefix::PrefixAny, Tag::TagAny),
-        (Prefix::E, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::S, Prefix::Any, Tag::Any),
+        (Prefix::E, Prefix::Any, Tag::Any),
     ];
 
     const BILOU_ALLOWED_PREFIXES: [Prefix; 5] =
         [Prefix::I, Prefix::O, Prefix::U, Prefix::B, Prefix::O];
     const BILOU_START_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::PrefixAny, Prefix::B, Tag::TagAny),
-        (Prefix::PrefixAny, Prefix::U, Tag::TagAny),
+        (Prefix::Any, Prefix::B, Tag::Any),
+        (Prefix::Any, Prefix::U, Tag::Any),
     ];
     const BILOU_INSIDE_PATTERNS: [(Prefix, Prefix, Tag); 4] = [
         (Prefix::B, Prefix::I, Tag::Same),
@@ -442,8 +429,8 @@ impl<'a> Token<'a> {
         (Prefix::I, Prefix::L, Tag::Same),
     ];
     const BILOU_END_PATTERNS: [(Prefix, Prefix, Tag); 2] = [
-        (Prefix::U, Prefix::PrefixAny, Tag::TagAny),
-        (Prefix::L, Prefix::PrefixAny, Tag::TagAny),
+        (Prefix::U, Prefix::Any, Tag::Any),
+        (Prefix::L, Prefix::Any, Tag::Any),
     ];
     fn allowed_prefixes(&'a self) -> &'static [Prefix] {
         match self {
@@ -497,16 +484,6 @@ impl<'a> Token<'a> {
     }
 
     fn inner(&self) -> &InnerToken {
-        match self {
-            Self::IOE1 { token } => &token,
-            Self::IOE2 { token } => &token,
-            Self::IOB1 { token } => &token,
-            Self::IOB2 { token } => &token,
-            Self::BILOU { token } => &token,
-            Self::IOBES { token } => &token,
-        }
-    }
-    fn inner_mut(&'a mut self) -> &mut InnerToken {
         match self {
             Self::IOE1 { token } => token,
             Self::IOE2 { token } => token,
@@ -581,19 +558,19 @@ struct ExtendedTokensIterator<'a> {
 impl<'a> Iterator for ExtendedTokensIterator<'a> {
     type Item = Result<Token<'a>, ParsingPrefixError<&'a str>>;
     fn next(&mut self) -> Option<Self::Item> {
-        let ret: Option<Result<Token, ParsingPrefixError<&'a str>>>;
-        if self.index > self.total_len {
-            ret = None;
-        } else if self.index == self.total_len {
-            ret = Some(Ok(take(&mut self.outside_token)));
-        } else {
-            let cow_str = unsafe { take(self.tokens.get_unchecked_mut(self.index)) };
-            let inner_token = InnerToken::new(cow_str, self.suffix, self.delimiter);
-            ret = match inner_token {
-                Err(msg) => Some(Err(msg)),
-                Ok(res) => Some(Ok(Token::new(self.scheme, res))),
-            };
-        }
+        // let ret: Option<Result<Token, ParsingPrefixError<&'a str>>>;
+        let ret = match self.index.cmp(&self.total_len) {
+            Ordering::Greater => None,
+            Ordering::Equal => Some(Ok(take(&mut self.outside_token))),
+            Ordering::Less => {
+                let cow_str = unsafe { take(self.tokens.get_unchecked_mut(self.index)) };
+                let inner_token = InnerToken::new(cow_str, self.suffix, self.delimiter);
+                match inner_token {
+                    Err(msg) => Some(Err(msg)),
+                    Ok(res) => Some(Ok(Token::new(self.scheme, res))),
+                }
+            }
+        };
         self.index += 1;
         ret
     }
@@ -715,10 +692,10 @@ struct EntitiesIterAdaptor<'a> {
 //     prev = self.extended_tokens[i - 1]
 // return entities
 impl<'a> Iterator for EntitiesIterAdaptor<'a> {
-    type Item = Option<Result<Entity<'a>, Box<dyn Error>>>;
+    type Item = Option<Result<Entity<'a>, InvalidToken>>;
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        let ret: Option<Option<Result<Entity<'a>, Box<dyn Error>>>>;
+        let ret: Option<Option<Result<Entity<'a>, InvalidToken>>>;
         if self.index >= self.len - 1 {
             return None;
         }
@@ -730,9 +707,9 @@ impl<'a> Iterator for EntitiesIterAdaptor<'a> {
         let borrowed_current = current.borrow();
         let is_valid = borrowed_current.is_valid();
         if !is_valid {
-            ret = Some(Some(Err(Box::new(InvalidToken(
+            ret = Some(Some(Err(InvalidToken(
                 borrowed_current.inner().token.to_string(),
-            )))))
+            ))))
         } else if borrowed_current.is_start(prev.inner()) {
             drop(mut_tokens_ref);
             let end = mut_tokens
@@ -808,10 +785,10 @@ where
 struct EntitiesIter<'a>(EntitiesIterAdaptor<'a>);
 
 impl<'a> Iterator for EntitiesIter<'a> {
-    type Item = Result<Entity<'a>, Box<dyn Error>>;
+    type Item = Result<Entity<'a>, InvalidToken>;
     fn next(&mut self) -> Option<Self::Item> {
-        let mut res: Option<Option<Result<Entity<'a>, Box<dyn Error>>>> = self.0.next();
-        // Remove the Some(None) cases
+        let mut res: Option<Option<Result<Entity<'a>, InvalidToken>>> = self.0.next();
+        // Removes the Some(None) cases
         while matches!(&res, Some(None)) {
             res = self.0.next();
         }
@@ -821,26 +798,213 @@ impl<'a> Iterator for EntitiesIter<'a> {
             None => None,
             Some(None) => unreachable!(),
         }
-        // loop{
-        //     match self.0.next(){
-        //         Some(Some(resu)) => {res = },
-        //         Some(None) =>
-        //     }
-        // }
     }
 }
 
-// struct Entities
+impl<'a> EntitiesIter<'a> {
+    fn new(tokens: Tokens<'a>) -> Self {
+        let adaptor = EntitiesIterAdaptor::new(tokens);
+        EntitiesIter(adaptor)
+    }
+}
+// class Entities:
+
+//     def __init__(self, sequences: List[List[str]], scheme: Type[Token], suffix: bool = False, delimiter: str = '-'):
+//         self.entities = [
+//             Tokens(seq, scheme=scheme, suffix=suffix, delimiter=delimiter, sent_id=sent_id).entities
+//             for sent_id, seq in enumerate(sequences)
+//         ]
+
+//     def filter(self, tag_name: str):
+//         entities = {entity for entity in chain(*self.entities) if entity.tag == tag_name}
+//         return entities
+
+//     @property
+//     def unique_tags(self):
+//         tags = {
+//             entity.tag for entity in chain(*self.entities)
+//         }
+//         return tags
+
+#[derive(Debug, Clone)]
+pub enum ConversionError<S: AsRef<str>> {
+    InvalidToken(InvalidToken),
+    ParsingPrefix(ParsingPrefixError<S>),
+}
+
+impl<S: AsRef<str>> From<InvalidToken> for ConversionError<S> {
+    fn from(value: InvalidToken) -> Self {
+        Self::InvalidToken(value)
+    }
+}
+
+impl<S: AsRef<str>> From<ParsingPrefixError<S>> for ConversionError<S> {
+    fn from(value: ParsingPrefixError<S>) -> Self {
+        Self::ParsingPrefix(value)
+    }
+}
+
+impl<S: AsRef<str>> Display for ConversionError<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidToken(it) => std::fmt::Display::fmt(&it, f),
+            Self::ParsingPrefix(pp) => pp.fmt(f),
+        }
+    }
+}
+
+impl<S: AsRef<str> + Debug> Error for ConversionError<S> {}
+
+pub struct Entities<'a>(Vec<Vec<Entity<'a>>>);
+
+/// This trait mimics the TryFrom trait from the std lib. It is used
+/// to *try* to build an Entities structure. It can fail if there is a
+/// malformed token in `tokens`.
+///
+/// * `tokens`: Vector containing the raw tokens.
+/// * `scheme`: The scheme type to use (ex: IOB2, BILOU, etc.). The
+///    supported scheme are the variant of SchemeType.
+/// * `suffix`: Set it to `true` if the Tag is located at the start of
+///    the token and set it to `false` if the Tag is located at the
+///    end of the token.
+/// * `delimiter`: The character used separate the Tag from the Prefix
+///    (ex: `I-PER`, where the tag is `PER` and the prefix is `I`)
+/// * `sent_id`: An optional id.
+pub trait TryFromVec<'a, T> {
+    type Error: Error;
+    fn try_from_vecs(
+        tokens: Vec<Vec<T>>,
+        scheme: SchemeType,
+        suffix: bool,
+        delimiter: char,
+        sent_id: Option<usize>,
+    ) -> Result<Entities<'a>, Self::Error>;
+}
+
+impl<'a> TryFromVec<'a, &'a str> for Entities<'a> {
+    type Error = ConversionError<&'a str>;
+    fn try_from_vecs(
+        vec_of_tokens_2d: Vec<Vec<&'a str>>,
+        scheme: SchemeType,
+        suffix: bool,
+        delimiter: char,
+        sent_id: Option<usize>,
+    ) -> Result<Entities<'a>, Self::Error> {
+        let vec_of_tokens: Result<Vec<_>, ParsingPrefixError<&str>> = vec_of_tokens_2d
+            .into_iter()
+            .map(|v| v.into_iter().map(Cow::from).collect())
+            .map(|v| Tokens::new(v, scheme, suffix, delimiter, sent_id))
+            .collect();
+        let entities: Result<Vec<Vec<Entity>>, InvalidToken> = match vec_of_tokens {
+            Ok(vec_of_toks) => vec_of_toks
+                .into_iter()
+                .map(|t| EntitiesIter::new(t).collect())
+                .collect(),
+            Err(msg) => Err(ConversionError::from(msg))?,
+        };
+        Ok(Entities(entities?))
+    }
+}
+
+impl<'a> Entities<'a> {
+    /// Returns a set containing the (unique) tags of `self`. The
+    /// return HashSet is valid until for as long as `self` is valid.
+    pub fn unique_tags(&'a self) -> HashSet<&str> {
+        let entities_ref = &self.0;
+        let set: HashSet<_> = entities_ref
+            .iter()
+            .flat_map(|v| v.iter().map(|e| e.tag.as_ref()))
+            .collect();
+        set
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn test_entities_try_from() {
+        let vec_of_tokens = vec![build_str_vec(), build_str_vec_diff()];
+        let entities =
+            Entities::try_from_vecs(vec_of_tokens, SchemeType::IOB2, false, '-', None).unwrap();
+        let expected_vec_1 = vec![
+            Entity {
+                sent_id: None,
+                start: 0,
+                end: 2,
+                tag: Cow::Borrowed("PER"),
+            },
+            Entity {
+                sent_id: None,
+                start: 3,
+                end: 4,
+                tag: Cow::Borrowed("LOC"),
+            },
+        ];
+        let expected_vec_2 = vec![
+            Entity {
+                sent_id: None,
+                start: 0,
+                end: 2,
+                tag: Cow::Borrowed("GEO"),
+            },
+            Entity {
+                sent_id: None,
+                start: 3,
+                end: 4,
+                tag: Cow::Borrowed("GEO"),
+            },
+            Entity {
+                sent_id: None,
+                start: 5,
+                end: 8,
+                tag: Cow::Borrowed("PER"),
+            },
+            Entity {
+                sent_id: None,
+                start: 8,
+                end: 9,
+                tag: Cow::Borrowed("LOC"),
+            },
+        ];
+        assert_eq!(entities.0, vec![expected_vec_1, expected_vec_2]);
+    }
+
+    #[test]
+    fn test_entities_filter() {
+        let tokens = build_tokens();
+        println!("{:?}", tokens);
+        let entities = build_entities();
+        let expected = vec![
+            Entity {
+                sent_id: None,
+                start: 0,
+                end: 2,
+                tag: Cow::Borrowed("PER"),
+            },
+            Entity {
+                sent_id: None,
+                start: 3,
+                end: 4,
+                tag: Cow::Borrowed("LOC"),
+            },
+        ];
+        assert_eq!(entities, expected);
+    }
+
+    fn build_entities() -> Vec<Entity<'static>> {
+        let tokens = build_tokens();
+        let entities: Result<Vec<_>, InvalidToken> = EntitiesIter::new(tokens).collect();
+        entities.unwrap()
+    }
 
     #[test]
     fn test_entity_iter() {
         let tokens = build_tokens();
         println!("tokens: {:?}", tokens);
         let iter = EntitiesIter(EntitiesIterAdaptor::new(tokens.clone()));
-        let wrapped_entities: Result<Vec<_>, Box<dyn Error>> = iter.collect();
+        let wrapped_entities: Result<Vec<_>, InvalidToken> = iter.collect();
         let entities = wrapped_entities.unwrap();
         let expected_entities = vec![
             Entity {
@@ -966,6 +1130,14 @@ mod test {
             Cow::from("I-PER"),
             Cow::from("O"),
             Cow::from("B-LOC"),
+        ]
+    }
+    fn build_str_vec() -> Vec<&'static str> {
+        vec!["B-PER", "I-PER", "O", "B-LOC"]
+    }
+    fn build_str_vec_diff() -> Vec<&'static str> {
+        vec![
+            "B-GEO", "I-GEO", "O", "B-GEO", "O", "B-PER", "I-PER", "I-PER", "B-LOC",
         ]
     }
 }
