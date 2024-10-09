@@ -28,6 +28,7 @@ categories = ["science", "text-processing", "mathematics"]
 unicode-segmentation = "1.12.0"
 rusev_macro = {path = "./rusev_macro"}
 ndarray = { version = "0.16.1", features = ["serde", "rayon", "blas"] }
+num = "0.4.3"
 
 [dev-dependencies]
 parameterized = "2.0.0"

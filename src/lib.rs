@@ -741,16 +741,18 @@ impl<'a, 'b> EntitiesIterAdaptor<'a>
 where
     'a: 'b,
 {
-    /// Takes out the current and previous tokens (in that order) when
-    /// given an index. The index must be >= 0 and < tokens.len() or
-    /// this function will result in UB. Calling this function with an
-    /// already used index will result in default tokens. This
-    /// functions behaves differently, depending on the value of the
-    /// index. If index is 0, the previous token is the outside token
-    /// of the extended tokens. Else, it takes the tokens at index `i`
-    /// and `i-1`.
+    /// Takes out the current tokens and gets a reference to the
+    /// previous tokens (in that order) when given an index. The index
+    /// must be >= 0 and < tokens.len() or this function will result
+    /// in UB. Calling this function with an already used index will
+    /// result in default tokens returned. This functions behaves
+    /// differently, depending on the value of the index to accomodate
+    /// the `outside_token`, located at the end of the
+    /// `extended_vector` vector. If `index` is 0, the previous token
+    /// is the outside token of the extended tokens. Else, it takes
+    /// the tokens at index `i` and `i-1`.
     ///
-    /// SAFETY: The index must be >= 0 and < tokens.len(), or this
+    /// SAFETY: The index must be >= 0 and <= tokens.len()-1, or this
     /// function will result in UB.
     ///
     /// * `tokens`: The tokens. The current and previous tokens are
