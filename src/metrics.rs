@@ -1,6 +1,7 @@
-use ndarray::prelude::*;
 use ndarray::parallel::prelude::*;
+use ndarray::prelude::*;
 use ndarray::Array;
+use num::Float as NumFloat;
 
 struct PerClassScore(Vec<f32>, Vec<f32>, Vec<f32>, Vec<i32>);
 struct AverageScore(f32, f32, f32, i32);
@@ -35,34 +36,45 @@ enum Average {
     Weighted,
 }
 
-/// This enum wraps the floating point type used in the
-/// calculation. It excludes f128 because f128 are not well supported
-/// in most architectures and is nightly:
-/// https://doc.rust-lang.org/nightly/std/primitive.f128.html
-#[derive(Debug, Clone, PartialEq, Copy)]
-enum FloatingPoint {
-    F32,
-    F64,
+trait Float: NumFloat + Send + Sync {
+    fn zero() -> Self;
+    fn one() -> Self;
 }
 
+impl Float for f32 {
+    fn one() -> Self {
+        1.0
+    }
+    fn zero() -> Self {
+        0.0
+    }
+}
 
-impl Default for FloatingPoint {
-    fn default() -> Self {
-        Self::F32
+impl Float for f64 {
+    fn one() -> Self {
+        1.0
+    }
+    fn zero() -> Self {
+        0.0
     }
 }
 
 // TODO: Change the warn_for `vec` for a slice (if possible)
-fn prf_divide<FloatingPoint, D>(
-    numerator: Array<FloatingPoint, D>,
-    denominator: Array<FloatingPoint, D>,
+fn prf_divide<F: Float, D: Dimension>(
+    numerator: Array<F, D>,
+    mut denominator: ArrayViewMut<F, D>,
+    parallel: bool,
     metric: Metric,
     modifier: Modifier,
     average: Average,
     warn_for: Vec<Metric>,
     zero_division: DivisionByZeroResultStrategy,
 ) {
-    todo!()
+    let result = if parallel {
+        par_prf_divide_results_and_mask(numerator, denominator)
+    } else {
+        prf_divide_results(numerator, denominator)
+    };
     // mask = denominator == 0.0
     // denominator = denominator.copy()
     // denominator[mask] = 1  # avoid infs/nans
@@ -75,20 +87,41 @@ fn prf_divide<FloatingPoint, D>(
     // result[mask] = 0.0 if zero_division in ['warn', 0] else 1.0
 }
 
-/// This function computes the result in parallel. For a synchronous cersion of this function, see `prf_divide_results``
-fn par_prf_divide_results<D: Dimension>(
-    numerator: Array<FloatingPoint, D>,
-    denominator: Array<FloatingPoint, D>,
-) {
-    let mask = denominator.par_mapv_inplace(|v| {if v == 0.0 {
-        v
-    }else {v}} );
+/// This function computes the result in parallel. For a synchronous
+/// version of this function, see `prf_divide_results``
+///
+/// * `numerator`: Numerator of the division
+/// * `denominator`: denominator of the division
+fn par_prf_divide_results_and_mask<F: Float, D: Dimension>(
+    numerator: Array<F, D>,
+    mut denominator: ArrayViewMut<F, D>,
+) -> Array<F, D> {
+    denominator.par_mapv_inplace(|v| {
+        if v == <F as Float>::zero() {
+            <F as Float>::one()
+        } else {
+            v
+        }
+    });
+    numerator / denominator
 }
-/// This functon computes the result synchronously. For a parallel function, see `par_prf_divide_results`.
-fn prf_divide_results<FloatingPoint, D>(
-    numerator: Array<FloatingPoint, D>,
-    denominator: Array<FloatingPoint, D>,
-) {
+/// This function computes the result synchronously. For a parallel
+/// version of this function, see `par_prf_divide_results``
+///
+/// * `numerator`: Numerator of the division
+/// * `denominator`: denominator of the division
+fn prf_divide_nesults_and_mask<F: Float, D: Dimension>(
+    numerator: Array<F, D>,
+    mut denominator: ArrayViewMut<F, D>,
+) -> Array<F, D> {
+    denominator.mapv_inplace(|v| {
+        if v == <F as Float>::zero() {
+            <F as Float>::one()
+        } else {
+            v
+        }
+    });
+    numerator / denominator
 }
 
 #[derive(Debug)]
