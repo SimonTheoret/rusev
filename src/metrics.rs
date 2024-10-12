@@ -73,8 +73,9 @@ fn prf_divide<F: Float, D: Dimension>(
     let result = if parallel {
         par_prf_divide_results_and_mask(numerator, denominator)
     } else {
-        prf_divide_results(numerator, denominator)
+        prf_divide_results_and_mask(numerator, denominator)
     };
+
     // mask = denominator == 0.0
     // denominator = denominator.copy()
     // denominator[mask] = 1  # avoid infs/nans
@@ -110,7 +111,7 @@ fn par_prf_divide_results_and_mask<F: Float, D: Dimension>(
 ///
 /// * `numerator`: Numerator of the division
 /// * `denominator`: denominator of the division
-fn prf_divide_nesults_and_mask<F: Float, D: Dimension>(
+fn prf_divide_results_and_mask<F: Float, D: Dimension>(
     numerator: Array<F, D>,
     mut denominator: ArrayViewMut<F, D>,
 ) -> Array<F, D> {
