@@ -25,8 +25,10 @@ use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::mem::take;
 use std::str::FromStr;
+use std::sync::OnceLock;
 use std::{borrow::Cow, cell::RefCell};
 use unicode_segmentation::UnicodeSegmentation;
+use ahash::AHashSet;
 
 mod metrics;
 
@@ -857,7 +859,7 @@ impl<S: AsRef<str>> Display for ConversionError<S> {
 
 impl<S: AsRef<str> + Debug> Error for ConversionError<S> {}
 
-pub struct Entities<'a>(Vec<Vec<Entity<'a>>>);
+pub struct Entities<'a>(Vec<Vec<Entity<'a>>>, OnceLock<AHashSet<&'a str>>);
 
 /// This trait mimics the TryFrom trait from the std lib. It is used
 /// to *try* to build an Entities structure. It can fail if there is a
@@ -904,20 +906,26 @@ impl<'a> TryFromVec<'a, &'a str> for Entities<'a> {
                 .collect(),
             Err(msg) => Err(ConversionError::from(msg))?,
         };
-        Ok(Entities(entities?))
+        Ok(Entities(entities?, OnceLock::new()))
     }
 }
 
 impl<'a> Entities<'a> {
     /// Returns a set containing the (unique) tags of `self`. The
     /// return HashSet is valid until for as long as `self` is valid.
-    pub fn unique_tags(&'a self) -> HashSet<&str> {
-        let entities_ref = &self.0;
-        let set: HashSet<_> = entities_ref
-            .iter()
-            .flat_map(|v| v.iter().map(|e| e.tag.as_ref()))
-            .collect();
-        set
+    pub fn unique_tags(&'a self) -> &AHashSet<&str> {
+        let res = self.1.get_or_init(|| {
+            let mut set = AHashSet::with_capacity(self.0.len());
+            self.0
+                .iter()
+                .flat_map(|v| v.iter().map(|e| e.tag.as_ref()))
+                .map(|ref_str| set.insert(ref_str));
+            set
+        });
+        res
+    }
+    pub fn filter<S: AsRef<str>>(&self, tag_name: S) -> &AHashSet<&str>{
+        
     }
 }
 
