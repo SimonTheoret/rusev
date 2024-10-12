@@ -18,8 +18,8 @@
 //! follows another chunk of the same type without O tags between them. It is used only in that
 //! case: when a chunk comes after an O tag, the first token of the chunk takes the I- prefix.
 
+use ahash::AHashSet;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt::{Debug, Display};
@@ -28,12 +28,11 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{borrow::Cow, cell::RefCell};
 use unicode_segmentation::UnicodeSegmentation;
-use ahash::AHashSet;
 
 mod metrics;
 
 /// An entity represent a named objet in named entity recognition (NER).
-#[derive(Debug, Hash, PartialEq, Clone)]
+#[derive(Debug, Hash, Clone, PartialEq, Eq)]
 pub struct Entity<'a> {
     sent_id: Option<usize>,
     start: usize,
@@ -263,28 +262,6 @@ impl<'a> InnerToken<'a> {
         false
     }
 }
-
-// #[derive(Debug, Hash)]
-// struct InvalidTokenError(String, Option<Vec<Prefix>>);
-//
-// impl<'a> From<&InnerToken<'a>> for InvalidTokenError {
-//     fn from(value: &InnerToken<'a>) -> Self {
-//         InvalidTokenError(value.get_token_owned(), value.get_allowed_prefixes_owned())
-//     }
-// }
-//
-// impl Display for InvalidTokenError {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(
-//             f,
-//             "The current token ({}) is not allowed. Only the following tokens are allowd: {:?}",
-//             self.0, self.1
-//         )
-//     }
-// }
-//
-// impl Error for InvalidTokenError {}
-//
 
 #[derive(Debug, Clone, Copy)]
 pub enum SchemeType {
@@ -811,24 +788,6 @@ impl<'a> EntitiesIter<'a> {
         EntitiesIter(adaptor)
     }
 }
-// class Entities:
-
-//     def __init__(self, sequences: List[List[str]], scheme: Type[Token], suffix: bool = False, delimiter: str = '-'):
-//         self.entities = [
-//             Tokens(seq, scheme=scheme, suffix=suffix, delimiter=delimiter, sent_id=sent_id).entities
-//             for sent_id, seq in enumerate(sequences)
-//         ]
-
-//     def filter(self, tag_name: str):
-//         entities = {entity for entity in chain(*self.entities) if entity.tag == tag_name}
-//         return entities
-
-//     @property
-//     def unique_tags(self):
-//         tags = {
-//             entity.tag for entity in chain(*self.entities)
-//         }
-//         return tags
 
 #[derive(Debug, Clone)]
 pub enum ConversionError<S: AsRef<str>> {
@@ -916,7 +875,8 @@ impl<'a> Entities<'a> {
     pub fn unique_tags(&'a self) -> &AHashSet<&str> {
         let res = self.1.get_or_init(|| {
             let mut set = AHashSet::with_capacity(self.0.len());
-            self.0
+            let _ = self
+                .0
                 .iter()
                 .flat_map(|v| v.iter().map(|e| e.tag.as_ref()))
                 .map(|ref_str| set.insert(ref_str));
@@ -924,8 +884,20 @@ impl<'a> Entities<'a> {
         });
         res
     }
-    pub fn filter<S: AsRef<str>>(&self, tag_name: S) -> &AHashSet<&str>{
-        
+    /// Filters the entities for a given tag name and returns them in a HashSet.
+    ///
+    /// * `tag_name`: This variable is used to compare the tag of the
+    ///   entity with. Only those whose tag is equal to a reference to
+    ///   `tag_name` are added into the returned HashSet.
+    pub fn filter<S: AsRef<str>>(&self, tag_name: S) -> AHashSet<&Entity> {
+        let tag_name_ref = tag_name.as_ref();
+        let mut set = AHashSet::with_capacity(self.0.len());
+        let _ = self.0.iter().flat_map(|v| v.iter()).map(|entity| {
+            if entity.tag == tag_name_ref {
+                set.insert(entity);
+            }
+        });
+        set
     }
 }
 
