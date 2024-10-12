@@ -871,7 +871,7 @@ impl<'a> TryFromVec<'a, &'a str> for Entities<'a> {
 
 impl<'a> Entities<'a> {
     /// Returns a set containing the (unique) tags of `self`. The
-    /// return HashSet is valid until for as long as `self` is valid.
+    /// returned HashSet is valid for as long as `self` is valid.
     pub fn unique_tags(&'a self) -> &AHashSet<&str> {
         let res = self.1.get_or_init(|| {
             let mut set = AHashSet::with_capacity(self.0.len());
@@ -884,6 +884,7 @@ impl<'a> Entities<'a> {
         });
         res
     }
+    #[inline(always)]
     /// Filters the entities for a given tag name and returns them in a HashSet.
     ///
     /// * `tag_name`: This variable is used to compare the tag of the
