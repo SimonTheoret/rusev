@@ -1,13 +1,9 @@
-use ndarray::parallel::prelude::*;
 use ndarray::prelude::*;
 use ndarray::Array;
 use num::Float as NumFloat;
-use std::cell::UnsafeCell;
-use std::pin::Pin;
-use std::sync::atomic::AtomicBool;
-use std::sync::LazyLock;
+use std::error::Error;
+use std::fmt::Display;
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex};
 
 struct PerClassScore(Vec<f32>, Vec<f32>, Vec<f32>, Vec<i32>);
 struct AverageScore(f32, f32, f32, i32);
@@ -18,17 +14,28 @@ enum Scores {
 }
 
 #[derive(Debug)]
-enum DivisionByZeroResultStrategy {
-    ReplaceBy0,
+enum DivisionByZeroStrategy {
+    /// Replace denominator equal to 0 by 1 for the calculations
     ReplaceBy1,
-    Error,
-    Unchecked,
+    /// Returns an error
+    ReturnError,
 }
-impl Default for DivisionByZeroResultStrategy {
+impl Default for DivisionByZeroStrategy {
     fn default() -> Self {
-        Self::ReplaceBy0
+        Self::ReplaceBy1
     }
 }
+
+#[derive(Debug, Clone)]
+struct DivisionByZeroError;
+
+impl Display for DivisionByZeroError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Encountered division by zero")
+    }
+}
+
+impl Error for DivisionByZeroError {}
 
 enum Modifier {
     Predicted,
@@ -68,30 +75,53 @@ impl Float for f64 {
 // TODO: Change the warn_for `vec` for a slice (if possible)
 fn prf_divide<F: Float, D: Dimension>(
     numerator: Array<F, D>,
-    mut denominator: ArrayViewMut<F, D>,
+    denominator: ArrayViewMut<F, D>,
     parallel: bool,
     metric: Metric,
     modifier: Modifier,
     average: Average,
     warn_for: Vec<Metric>,
-    zero_division: DivisionByZeroResultStrategy,
-) {
-    let result = if parallel {
+    zero_division: DivisionByZeroStrategy,
+) -> Result<(), DivisionByZeroError> {
+    let (result, found_0_in_denom) = if parallel {
         par_prf_divide_results_and_mask(numerator, denominator)
     } else {
         prf_divide_results_and_mask(numerator, denominator)
     };
+    if found_0_in_denom {
+        match zero_division {
+            DivisionByZeroStrategy::ReturnError => Err(DivisionByZeroError),
+            DivisionByZeroStrategy::ReplaceBy1 => {
 
-    // mask = denominator == 0.0
-    // denominator = denominator.copy()
-    // denominator[mask] = 1  # avoid infs/nans
-    // result = numerator / denominator
+            }
+        }
+    }
+    // if ``zero_division=1``, set those with denominator == 0 equal to 1
+    //result[mask] = 0.0 if zero_division in ['warn', 0] else 1.0
 
-    // if not np.any(mask):
-    //     return result
+    // the user will be removing warnings if zero_division is set to something
+    // different than its default value. If we are computing only f-score
+    // the warning will be raised only if precision and recall are ill-defined
+    //if zero_division != 'warn' or metric not in warn_for:
+    //    return result
 
-    // # if ``zero_division=1``, set those with denominator == 0 equal to 1
-    // result[mask] = 0.0 if zero_division in ['warn', 0] else 1.0
+    // build appropriate warning
+    // E.g. "Precision and F-score are ill-defined and being set to 0.0 in
+    // labels with no predicted samples. Use ``zero_division`` parameter to
+    // control this behavior."
+
+    //if metric in warn_for and 'f-score' in warn_for:
+    //    msg_start = '{0} and F-score are'.format(metric.title())
+    //elif metric in warn_for:
+    //    msg_start = '{0} is'.format(metric.title())
+    //elif 'f-score' in warn_for:
+    //    msg_start = 'F-score is'
+    //else:
+    //    return result
+
+    //_warn_prf(average, modifier, msg_start, len(result))
+
+    //return result
 }
 
 type Found0InDenominator = bool;
@@ -174,4 +204,3 @@ mod tests {
         assert_eq!(par_div_result, array![[1., 1., 1., 1.,]]);
     }
 }
-
